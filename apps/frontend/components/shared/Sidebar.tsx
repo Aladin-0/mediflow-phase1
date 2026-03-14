@@ -1,0 +1,253 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { usePermissions, type Permission } from '@/hooks/usePermissions';
+import { useAuthStore } from '@/store/authStore';
+import { authApi } from '@/lib/apiClient';
+import { StaffRole } from '@/types';
+import { RoleBadge } from './RoleBadge';
+import { cn } from '@/lib/utils';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+    LayoutDashboard, Receipt, Package, ShoppingCart, Users,
+    CreditCard, UserCog, CalendarCheck, BarChart3, Settings,
+    Pill, ChevronLeft, ChevronRight, MoreVertical
+} from 'lucide-react';
+
+type NavItem = {
+    label: string;
+    href: string;
+    icon: any;
+    permission: Permission | null;
+    shortcut?: string;
+    badge?: string;
+};
+
+const NAV_ITEMS: NavItem[] = [
+    {
+        label: 'Dashboard',
+        href: '/dashboard',
+        icon: LayoutDashboard,
+        permission: null,
+    },
+    {
+        label: 'Billing',
+        href: '/dashboard/billing',
+        icon: Receipt,
+        permission: 'create_bills' as Permission,
+        shortcut: 'B',
+    },
+    {
+        label: 'Inventory',
+        href: '/dashboard/inventory',
+        icon: Package,
+        permission: 'view_outlet' as Permission,
+    },
+    {
+        label: 'Purchases',
+        href: '/dashboard/purchases',
+        icon: ShoppingCart,
+        permission: 'create_purchases' as Permission,
+    },
+    {
+        label: 'Customers',
+        href: '/dashboard/customers',
+        icon: Users,
+        permission: 'view_outlet' as Permission,
+    },
+    {
+        label: 'Credit / Udhari',
+        href: '/dashboard/credit',
+        icon: CreditCard,
+        permission: 'view_outlet' as Permission,
+        badge: 'overdueCreditCount',
+    },
+    {
+        label: 'Staff',
+        href: '/dashboard/staff',
+        icon: UserCog,
+        permission: 'manage_staff' as Permission,
+    },
+    {
+        label: 'Attendance',
+        href: '/dashboard/attendance',
+        icon: CalendarCheck,
+        permission: 'view_outlet' as Permission,
+    },
+    {
+        label: 'Reports',
+        href: '/dashboard/reports',
+        icon: BarChart3,
+        permission: 'view_reports' as Permission,
+    },
+    {
+        label: 'Settings',
+        href: '/dashboard/settings',
+        icon: Settings,
+        permission: 'manage_settings' as Permission,
+    },
+] as const;
+
+interface SidebarProps {
+    isCollapsed: boolean;
+    onToggle: () => void;
+    isMobile?: boolean; // If used within Sheet, might close on click
+}
+
+export function Sidebar({ isCollapsed, onToggle, isMobile = false }: SidebarProps) {
+    const pathname = usePathname();
+    const { hasPermission } = usePermissions();
+    const { user, logout } = useAuthStore();
+
+    const handleLogout = async () => {
+        try {
+            await authApi.logout();
+        } catch (e) {
+            // Ignore
+        } finally {
+            logout();
+            if (typeof window !== 'undefined') {
+                sessionStorage.removeItem('mediflow_mock_auth');
+                document.cookie = 'mediflow_mock_auth=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                window.location.href = '/login';
+            }
+        }
+    };
+
+    const getInitials = (name?: string) => {
+        if (!name) return 'U';
+        return name.substring(0, 2).toUpperCase();
+    };
+
+    return (
+        <div
+            className={cn(
+                'flex flex-col h-full bg-white border-r border-slate-200 transition-width duration-200 ease-in-out',
+                isCollapsed ? 'w-16' : 'w-64'
+            )}
+        >
+            {/* Top section: Logo */}
+            <div className="h-16 flex items-center justify-center border-b border-slate-200 px-4 relative">
+                <Pill className={cn('text-primary transition-all', isCollapsed ? 'w-6 h-6' : 'w-7 h-7 shrink-0')} />
+                {!isCollapsed && <span className="font-bold text-xl text-slate-900 ml-2 truncate w-full">MediFlow</span>}
+
+                {/* Desktop Collapse Toggle */}
+                {!isMobile && (
+                    <button
+                        onClick={onToggle}
+                        className="absolute -right-3 top-20 bg-white border border-slate-200 rounded-full w-6 h-6 flex items-center justify-center shadow-sm cursor-pointer hover:bg-slate-50 z-40"
+                        aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                    >
+                        {isCollapsed ? <ChevronRight className="w-4 h-4 text-slate-500" /> : <ChevronLeft className="w-4 h-4 text-slate-500" />}
+                    </button>
+                )}
+            </div>
+
+            {/* Nav items */}
+            <div className="flex-1 overflow-y-auto py-4 px-2 space-y-1">
+                <TooltipProvider delayDuration={isCollapsed ? 100 : 1000}>
+                    {NAV_ITEMS.map((item) => {
+                        if (item.permission && !hasPermission(item.permission)) return null;
+
+                        const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
+                        const Icon = item.icon;
+
+                        const content = (
+                            <Link
+                                href={item.href}
+                                onClick={isMobile ? onToggle : undefined} // Close sheet on click for mobile
+                                className={cn(
+                                    'flex items-center gap-3 rounded-lg text-sm font-medium transition-colors',
+                                    isCollapsed ? 'justify-center py-3' : 'px-3 py-2.5',
+                                    isActive
+                                        ? 'bg-primary text-white'
+                                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                                )}
+                            >
+                                <Icon className={cn('w-5 h-5 shrink-0')} />
+                                {!isCollapsed && (
+                                    <>
+                                        <span className="flex-1 truncate">{item.label}</span>
+                                        {isActive && item.shortcut && (
+                                            <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded text-white font-mono">
+                                                {item.shortcut}
+                                            </span>
+                                        )}
+                                        {item.badge === 'overdueCreditCount' && ( // Placeholder logic for now
+                                            <span className="ml-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                                                2
+                                            </span>
+                                        )}
+                                    </>
+                                )}
+                            </Link>
+                        );
+
+                        if (isCollapsed && !isMobile) {
+                            return (
+                                <Tooltip key={item.label}>
+                                    <TooltipTrigger asChild>{content}</TooltipTrigger>
+                                    <TooltipContent side="right">
+                                        <p>{item.label}</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                            );
+                        }
+
+                        return <div key={item.label}>{content}</div>;
+                    })}
+                </TooltipProvider>
+            </div>
+
+            {/* Bottom section: User card */}
+            <div className="border-t border-slate-200 p-3">
+                {isCollapsed && !isMobile ? (
+                    <TooltipProvider>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="flex justify-center cursor-pointer">
+                                    <Avatar className="w-8 h-8">
+                                        <AvatarFallback>{getInitials(user?.name)}</AvatarFallback>
+                                    </Avatar>
+                                </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                                <p>{user?.name}</p>
+                                <p className="text-xs text-muted-foreground">{user?.role}</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                ) : (
+                    <div className="flex items-center gap-3 w-full">
+                        <Avatar className="w-8 h-8 shrink-0">
+                            <AvatarFallback>{getInitials(user?.name)}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0 pr-1">
+                            <p className="text-sm font-medium text-slate-900 truncate">{user?.name}</p>
+                            {user?.role && <RoleBadge role={user.role as StaffRole} size="sm" />}
+                        </div>
+
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <button className="shrink-0 p-1 rounded hover:bg-slate-100 text-slate-500">
+                                    <MoreVertical className="w-4 h-4" />
+                                </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuItem>Profile</DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={handleLogout} className="text-red-600 focus:text-red-700 focus:bg-red-50 cursor-pointer">
+                                    Logout
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}

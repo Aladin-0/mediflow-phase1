@@ -1,0 +1,11 @@
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.env
+.env.local
+postgres_data/
+redis_data/
+dist/
+.turbo/
+*.egg-info/

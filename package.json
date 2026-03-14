@@ -1,0 +1,19 @@
+{
+    "name": "mediflow",
+    "private": true,
+    "workspaces": [
+        "apps/*",
+        "packages/*"
+    ],
+    "packageManager": "npm@10.8.2",
+    "scripts": {
+        "dev": "turbo run dev",
+        "build": "turbo run build",
+        "lint": "turbo run lint",
+        "type-check": "turbo run type-check"
+    },
+    "devDependencies": {
+        "turbo": "latest",
+        "typescript": "5.x"
+    }
+}

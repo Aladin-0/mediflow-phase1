@@ -1,0 +1,9 @@
+from django.urls import path
+from django.http import JsonResponse
+
+def health_check(request):
+    return JsonResponse({"status": "ok"})
+
+urlpatterns = [
+    path("api/v1/health/", health_check),
+]
