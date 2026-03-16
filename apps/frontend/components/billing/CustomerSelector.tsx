@@ -1,9 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, ChevronsUpDown, ShoppingBag, PlusCircle, User } from 'lucide-react'
+import { Check, ChevronsUpDown, ShoppingBag, PlusCircle, User, Loader2 } from 'lucide-react'
 import { useBillingStore } from '@/store/billingStore'
-import { mockCustomers } from '@/mock'
+import { useCustomerList } from '@/hooks/useCustomers'
+import { useDebounce } from '@/hooks/useDebounce'
 import { Customer } from '@/types'
 import { cn } from '@/lib/utils'
 import { formatCurrency } from '@/lib/gst'
@@ -24,10 +25,20 @@ import {
 
 export function CustomerSelector({ children }: { children: React.ReactNode }) {
     const [open, setOpen] = useState(false)
+    const [searchQuery, setSearchQuery] = useState('')
     const { customer, setCustomer } = useBillingStore()
 
-    // Using top 5 mock customers for "Recent" list
-    const recentCustomers = mockCustomers.slice(0, 5)
+    // Debounce search query to avoid excessive API calls
+    const debouncedSearch = useDebounce(searchQuery, 300)
+
+    // Fetch customers with search filter
+    const { data: customers = [], isLoading, error } = useCustomerList(
+        debouncedSearch ? { search: debouncedSearch } : undefined
+    )
+
+    // Show first 5 customers as "recent" when no search is active
+    const displayCustomers = searchQuery ? customers : customers.slice(0, 5)
+    const recentCustomers = displayCustomers
 
     const handleSelect = (selected: Customer | null) => {
         setCustomer(selected)
@@ -41,14 +52,31 @@ export function CustomerSelector({ children }: { children: React.ReactNode }) {
             </PopoverTrigger>
             <PopoverContent className="w-[300px] p-0" align="end">
                 <Command>
-                    <CommandInput placeholder="Search customer by name or phone..." />
+                    <CommandInput
+                        placeholder="Search customer by name or phone..."
+                        value={searchQuery}
+                        onValueChange={setSearchQuery}
+                    />
                     <CommandList>
-                        <CommandEmpty className="py-6 text-center text-sm">
-                            <p className="text-slate-500">No customer found.</p>
-                            <button className="mt-2 text-primary hover:underline font-medium">
-                                Add New Customer +
-                            </button>
-                        </CommandEmpty>
+                        {isLoading ? (
+                            <CommandEmpty className="py-6 text-center text-sm">
+                                <div className="flex items-center justify-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    <span className="text-slate-500">Loading customers...</span>
+                                </div>
+                            </CommandEmpty>
+                        ) : error ? (
+                            <CommandEmpty className="py-6 text-center text-sm">
+                                <p className="text-slate-500">Error loading customers</p>
+                            </CommandEmpty>
+                        ) : recentCustomers.length === 0 ? (
+                            <CommandEmpty className="py-6 text-center text-sm">
+                                <p className="text-slate-500">No customer found.</p>
+                                <button className="mt-2 text-primary hover:underline font-medium">
+                                    Add New Customer +
+                                </button>
+                            </CommandEmpty>
+                        ) : null}
 
                         <CommandGroup>
                             <CommandItem
@@ -64,10 +92,11 @@ export function CustomerSelector({ children }: { children: React.ReactNode }) {
                             </CommandItem>
                         </CommandGroup>
                         
-                        <CommandSeparator />
+                        {recentCustomers.length > 0 && <CommandSeparator />}
 
-                        <CommandGroup heading="Recent Customers">
-                            {recentCustomers.map((c) => (
+                        {recentCustomers.length > 0 && (
+                            <CommandGroup heading={searchQuery ? "Search Results" : "Recent Customers"}>
+                                {recentCustomers.map((c) => (
                                 <CommandItem
                                     key={c.id}
                                     onSelect={() => handleSelect(c)}
@@ -93,9 +122,10 @@ export function CustomerSelector({ children }: { children: React.ReactNode }) {
                                     </div>
                                 </CommandItem>
                             ))}
-                        </CommandGroup>
+                            </CommandGroup>
+                        )}
 
-                        <CommandSeparator />
+                        {recentCustomers.length > 0 && <CommandSeparator />}
 
                         <CommandGroup>
                             <CommandItem
