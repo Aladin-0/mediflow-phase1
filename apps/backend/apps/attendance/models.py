@@ -27,14 +27,19 @@ class AttendanceRecord(models.Model):
     status = models.CharField(max_length=20, choices=ATTENDANCE_STATUS_CHOICES, default='present')
     is_late = models.BooleanField(default=False)
     late_by_minutes = models.IntegerField(null=True, blank=True)
+    early_leave_minutes = models.IntegerField(default=0, help_text='Minutes left before end of shift')
 
     # Computation
     working_hours = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True,
                                        help_text='Calculated from check-in and check-out times')
 
     # Photos (base64 or URL)
-    check_in_photo = models.TextField(null=True, blank=True, help_text='Base64 or photo URL from selfie')
-    check_out_photo = models.TextField(null=True, blank=True, help_text='Base64 or photo URL from selfie')
+    check_in_photo = models.TextField(null=True, blank=True, help_text='Base64 encoded photo from selfie')
+    check_in_photo_url = models.URLField(max_length=500, null=True, blank=True,
+                                        help_text='URL to stored check-in photo (S3, GCS, etc.)')
+    check_out_photo = models.TextField(null=True, blank=True, help_text='Base64 encoded photo from selfie')
+    check_out_photo_url = models.URLField(max_length=500, null=True, blank=True,
+                                         help_text='URL to stored check-out photo (S3, GCS, etc.)')
 
     # Audit
     marked_by = models.ForeignKey('accounts.Staff', on_delete=models.SET_NULL, null=True, blank=True,

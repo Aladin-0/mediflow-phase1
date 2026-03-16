@@ -101,8 +101,26 @@ class Customer(models.Model):
     # Purchase history
     total_purchases = models.DecimalField(max_digits=12, decimal_places=2, default=0,
                                           help_text='Lifetime purchase value')
+    total_visits = models.IntegerField(default=0, help_text='Total number of visits/transactions')
     is_chronic = models.BooleanField(default=False, help_text='Chronic patient with regular medications')
     is_active = models.BooleanField(default=True)
+
+    # Health & Medical
+    blood_group = models.CharField(max_length=5, null=True, blank=True,
+                                  help_text='Blood group (A+, A-, B+, B-, AB+, AB-, O+, O-)')
+    allergies = models.JSONField(default=list, blank=True,
+                                help_text='List of drug allergies as string array')
+    chronic_conditions = models.JSONField(default=list, blank=True,
+                                        help_text='List of chronic conditions/diseases as string array')
+
+    # Doctor & Refills
+    preferred_doctor = models.ForeignKey('accounts.Doctor', on_delete=models.SET_NULL, null=True, blank=True,
+                                        related_name='patients', help_text='Patient\'s preferred doctor')
+    last_refill_date = models.DateField(null=True, blank=True,
+                                       help_text='Date of last medicine refill')
+    next_refill_due = models.DateField(null=True, blank=True,
+                                      help_text='Expected date of next medicine refill')
+    notes = models.TextField(null=True, blank=True, help_text='Clinical notes or special instructions')
 
     created_at = models.DateTimeField(auto_now_add=True)
 
