@@ -99,7 +99,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
         cart: state.cart.map((item) => {
             if (item.batchId === batchId) {
                 // Recalculate based on discount pct
-                const discountedRate = item.mrp * (1 - discountPct / 100);
+                const discountedRate = (item.saleRate ?? item.mrp) * (1 - discountPct / 100);
                 return {
                     ...item,
                     discountPct,

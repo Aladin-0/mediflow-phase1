@@ -1,4 +1,4 @@
-import { addDays, differenceInDays } from 'date-fns';
+import { addDays, differenceInDays, format } from 'date-fns';
 import {
     AuthResponse,
     StaffPinVerifyResponse,
@@ -16,7 +16,20 @@ import {
     DistributorLedgerEntry,
     CustomerFull,
     CustomerFilters,
-    CustomerPurchaseSummary
+    CustomerPurchaseSummary,
+    AttendanceRecord,
+    AttendanceSummary,
+    KioskCheckPayload,
+    MonthlyAttendanceFilter,
+    AttendanceStatus,
+    DateRangeFilter,
+    SalesReportRow,
+    GSTSummary,
+    StockValuationRow,
+    ExpiryReportRow,
+    StaffReportRow,
+    PurchaseReportRow,
+    ReportSummaryCard,
 } from '../types';
 import {
     mockStaff,
@@ -31,76 +44,77 @@ import {
     mockCustomers,
     mockPurchaseInvoices,
     mockDoctors,
-    mockPurchaseHistory
+    mockPurchaseHistory,
+    mockAttendanceRecords,
+    mockAttendanceSummaries,
+    STAFF_SHIFT_START,
+    mockSalesReportData,
+    mockSalesReportFeb2026,
+    mockGSTSummary,
+    mockStockValuation,
+    mockExpiryReport,
+    mockStaffReport,
+    mockPurchaseReport,
+    mockPaymentEntries,
+    mockExpenseEntries,
+    mockCustomerOutstanding,
 } from '../mock';
+import {
+    PaymentEntry,
+    ReceiptEntry,
+    ExpenseEntry,
+    CreatePaymentPayload,
+    CreateReceiptPayload,
+    CreateExpensePayload,
+    DistributorOutstanding,
+    CustomerOutstanding,
+    LedgerEntry,
+} from '../types';
+import { formatCurrency } from './gst';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const mockAuthApi = {
     login: async (phone: string, password: string): Promise<AuthResponse> => {
         await delay(300);
-        console.log("Mock login attempt:", { phone, password });
-        try {
-            if (phone.trim() === "9876543210" && password.trim() === "password123") {
-                let rajesh = mockStaff?.find(s => s.name === "Rajesh Patil");
-                
-                // Fallback in case of strange circular import breakages where mockStaff is undefined
-                if (!rajesh) {
-                    console.log("mockStaff array was empty/undefined, using fallback inline user");
-                    rajesh = {
-                        id: "staff-001",
-                        outletId: "outlet-001",
-                        name: "Rajesh Patil",
-                        phone: "9876543210",
-                        role: "super_admin",
-                        staffPin: "0000",
-                        maxDiscount: 30,
-                        canEditRate: true,
-                        canViewPurchaseRates: true,
-                        canCreatePurchases: true,
-                        canAccessReports: true,
-                        isActive: true,
-                        joiningDate: "2024-01-01T00:00:00Z"
-                    };
-                }
-
-                return {
-                    access: "mock_access_token",
-                    refresh: "mock_refresh_token",
-                    user: {
-                        id: rajesh.id,
-                        name: rajesh.name,
-                        phone: rajesh.phone,
-                        role: rajesh.role,
-                        staffPin: rajesh.staffPin,
-                        outletId: rajesh.outletId,
-                        outlet: {
-                            id: rajesh.outletId,
-                            organizationId: "org-001",
-                            name: "Ahilyanagar Main Branch",
-                            address: "Shop No 5, Savedi Road",
-                            city: "Ahilyanagar",
-                            state: "Maharashtra",
-                            pincode: "414003",
-                            gstin: "27AABCA1234A1Z5",
-                            drugLicenseNo: "MH/AHM/001/2024",
-                            phone: "02412-245678",
-                            isActive: true,
-                            createdAt: "2024-01-01T00:00:00Z"
-                        },
-                        maxDiscount: rajesh.maxDiscount,
-                        canEditRate: rajesh.canEditRate,
-                        canViewPurchaseRates: rajesh.canViewPurchaseRates,
-                        canCreatePurchases: rajesh.canCreatePurchases,
-                        canAccessReports: rajesh.canAccessReports
-                    }
-                };
-            }
-            throw { error: { code: 'AUTH_FAILED', message: "Invalid credentials" } };
-        } catch (e: any) {
-            console.error("Login verification crashed:", e);
-            throw e; // Rethrow so frontend catches it properly
+        const staff = mockStaff.find(s => s.phone === phone);
+        if (!staff) {
+            throw { error: { code: 'INVALID_CREDENTIALS', message: 'Phone number not registered' } };
         }
+        if (password !== "password123") {
+            throw { error: { code: 'INVALID_CREDENTIALS', message: 'Phone number not registered' } };
+        }
+        return {
+            access: `mock-jwt-${staff.id}`,
+            refresh: `mock-refresh-${staff.id}`,
+            user: {
+                id: staff.id,
+                name: staff.name,
+                phone: staff.phone,
+                role: staff.role,
+                staffPin: staff.staffPin,
+                maxDiscount: staff.maxDiscount,
+                canEditRate: staff.canEditRate,
+                canViewPurchaseRates: staff.canViewPurchaseRates,
+                canCreatePurchases: staff.canCreatePurchases,
+                canAccessReports: staff.canAccessReports,
+                outletId: staff.outletId,
+                outlet: {
+                    id: staff.outletId,
+                    organizationId: "org-001",
+                    name: "Ahilyanagar Main Branch",
+                    address: "Shop No 5, Savedi Road",
+                    city: "Ahilyanagar",
+                    state: "Maharashtra",
+                    pincode: "414003",
+                    gstin: "27AABCA1234A1Z5",
+                    drugLicenseNo: "MH/AHM/001/2024",
+                    phone: "02412-245678",
+                    isActive: true,
+                    createdAt: "2024-01-01T00:00:00Z"
+                },
+            },
+        };
     },
     logout: async (): Promise<void> => {
         await delay(300);
@@ -243,6 +257,17 @@ export const mockCreditApi = {
         acc.totalRepaid += payload.amount;
         if (acc.totalOutstanding <= 0) acc.status = 'cleared';
         else if (acc.totalOutstanding < acc.totalBorrowed) acc.status = 'partial';
+        mockCreditTransactions.push({
+            id: `txn-${Date.now()}`,
+            creditAccountId: acc.id,
+            customerId: acc.customerId,
+            type: 'credit',
+            amount: payload.amount,
+            description: `Payment via ${payload.mode ?? payload.paymentMode ?? 'cash'}`,
+            balanceAfter: acc.totalOutstanding,
+            recordedBy: 'system',
+            createdAt: new Date().toISOString(),
+        });
         return {
             success: true,
             newBalance: acc.totalOutstanding,
@@ -259,13 +284,19 @@ export const mockCreditApi = {
 
     getAgingSummary: async (outletId: string) => {
         await delay(250);
+        const buckets = [
+            { count: 2, amount: 1050 },
+            { count: 1, amount: 3200 },
+            { count: 1, amount: 2800 },
+            { count: 1, amount: 1000 },
+        ];
         return {
-            current:      { count: 2, amount: 1050 },
-            days30to60:   { count: 1, amount: 3200 },
-            days60to90:   { count: 1, amount: 2800 },
-            over90:       { count: 1, amount: 1000 },
+            current:      buckets[0],
+            days30to60:   buckets[1],
+            days60to90:   buckets[2],
+            over90:       buckets[3],
             totalOverdue: { count: 3, amount: 7000 },
-            totalOutstanding: { count: 5, amount: 8550 }
+            totalOutstanding: buckets.reduce((s, b) => s + b.amount, 0),
         };
     },
 
@@ -481,7 +512,7 @@ export const mockPurchasesApi = {
             data: invoices.sort((a, b) =>
                 b.invoiceDate.localeCompare(a.invoiceDate)
             ),
-            pagination: { page: 1, pageSize: 50, totalPages: 1, totalRecords: invoices.length }
+            pagination: { page: 1, pageSize: 50, totalPages: 1, total: invoices.length }
         };
     },
 
@@ -492,9 +523,18 @@ export const mockPurchasesApi = {
 
     create: async (payload: CreatePurchasePayload) => {
         await delay(500);
+        if (!payload.items?.length) {
+            throw { error: { code: 'EMPTY_ITEMS', message: 'At least one item required' } }
+        }
+        const dup = mockPurchaseInvoices.find(
+            p => p.invoiceNo === payload.invoiceNo &&
+                 p.outletId === payload.outletId
+        )
+        if (dup) throw { error: { code: 'DUPLICATE_INVOICE', message: `Invoice ${payload.invoiceNo} exists` } }
         const newInvoice: PurchaseInvoiceFull = {
             id: `purchase-${Date.now()}`,
             ...payload,
+            godown: payload.godown ?? 'main',
             distributor: mockDistributors.find(d => d.id === payload.distributorId)!,
             subtotal: payload.items.reduce((s, i) => s + i.purchaseRate * i.qty, 0),
             discountAmount: 0,
@@ -512,6 +552,20 @@ export const mockPurchasesApi = {
             createdAt: new Date().toISOString(),
         };
         mockPurchaseInvoices.unshift(newInvoice);
+        return newInvoice;
+    },
+
+    createPurchase: async (payload: CreatePurchasePayload) => {
+        await delay(600);
+        const newInvoice = {
+            id: `purchase-${Date.now()}`,
+            createdAt: new Date().toISOString(),
+            amountPaid: 0,
+            outstanding: payload.grandTotal,
+            createdByName: 'Mock User',
+            ...payload,
+        };
+        mockPurchaseInvoices.unshift(newInvoice as any);
         return newInvoice;
     },
 
@@ -672,5 +726,531 @@ export const mockCustomersApi = {
     getDoctors: async (_outletId: string) => {
         await delay(200);
         return mockDoctors;
+    },
+};
+
+export const mockAttendanceApi = {
+    getMonthlyRecords: async (filter: MonthlyAttendanceFilter): Promise<AttendanceRecord[]> => {
+        await delay(300);
+        return mockAttendanceRecords.filter(r => {
+            const d = new Date(r.date);
+            const matchMonth = d.getMonth() + 1 === filter.month;
+            const matchYear = d.getFullYear() === filter.year;
+            const matchStaff = filter.staffId ? r.staffId === filter.staffId : true;
+            return matchMonth && matchYear && matchStaff;
+        });
+    },
+
+    getTodayRecords: async (outletId: string): Promise<AttendanceRecord[]> => {
+        await delay(200);
+        const today = format(new Date(), 'yyyy-MM-dd');
+        return mockAttendanceRecords.filter(
+            r => r.date === today && r.outletId === outletId
+        );
+    },
+
+    getMonthlySummaries: async (
+        _outletId: string,
+        month: number,
+        year: number
+    ): Promise<AttendanceSummary[]> => {
+        await delay(300);
+        return mockAttendanceSummaries.filter(
+            s => s.month === month && s.year === year
+        );
+    },
+
+    checkIn: async (payload: KioskCheckPayload): Promise<AttendanceRecord> => {
+        await delay(400);
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const existing = mockAttendanceRecords.find(
+            r => r.staffId === payload.staffId && r.date === today
+        );
+        if (existing?.checkInTime) {
+            throw { error: { code: 'ALREADY_CHECKED_IN', message: 'Already checked in today' } };
+        }
+        const staff = mockStaff.find(s => s.id === payload.staffId);
+        const now = new Date();
+        const checkInTime = format(now, 'HH:mm:ss');
+        const shiftStart = STAFF_SHIFT_START[payload.staffId] ?? '09:00';
+        const [sh, sm] = shiftStart.split(':').map(Number);
+        const shiftStartMins = sh * 60 + sm + 10; // grace
+        const [ch, cm] = checkInTime.split(':').map(Number);
+        const checkInMins = ch * 60 + cm;
+        const isLate = checkInMins > shiftStartMins;
+        const lateByMinutes = isLate ? (checkInMins - (sh * 60 + sm)) : 0;
+
+        const record: AttendanceRecord = {
+            id: `att-${Date.now()}`,
+            staffId: payload.staffId,
+            staff,
+            date: today,
+            checkInTime,
+            status: isLate ? 'late' : 'present',
+            isLate,
+            lateByMinutes: lateByMinutes > 0 ? lateByMinutes : undefined,
+            checkInPhoto: payload.photoBase64,
+            outletId: payload.outletId,
+        };
+        mockAttendanceRecords.push(record);
+        return record;
+    },
+
+    checkOut: async (payload: KioskCheckPayload): Promise<AttendanceRecord> => {
+        await delay(400);
+        const today = format(new Date(), 'yyyy-MM-dd');
+        const existing = mockAttendanceRecords.find(
+            r => r.staffId === payload.staffId && r.date === today
+        );
+        if (!existing) {
+            throw { error: { code: 'NOT_CHECKED_IN', message: 'No check-in record found for today' } };
+        }
+        if (existing.checkOutTime) {
+            throw { error: { code: 'ALREADY_CHECKED_OUT', message: 'Already checked out today' } };
+        }
+        const checkOutTime = format(new Date(), 'HH:mm:ss');
+        const [ih, im] = existing.checkInTime!.split(':').map(Number);
+        const [oh, om] = checkOutTime.split(':').map(Number);
+        const workingHours = parseFloat(((oh * 60 + om - ih * 60 - im) / 60).toFixed(2));
+
+        existing.checkOutTime = checkOutTime;
+        existing.checkOutPhoto = payload.photoBase64;
+        existing.workingHours = workingHours;
+        return { ...existing };
+    },
+
+    markManual: async (payload: {
+        staffId: string;
+        date: string;
+        status: AttendanceStatus;
+        checkInTime?: string;
+        checkOutTime?: string;
+        notes?: string;
+        markedBy: string;
+    }): Promise<AttendanceRecord> => {
+        await delay(350);
+        const staff = mockStaff.find(s => s.id === payload.staffId);
+        const workingHours =
+            payload.checkInTime && payload.checkOutTime
+                ? (() => {
+                    const [ih, im] = payload.checkInTime.split(':').map(Number);
+                    const [oh, om] = payload.checkOutTime.split(':').map(Number);
+                    return parseFloat(((oh * 60 + om - ih * 60 - im) / 60).toFixed(2));
+                })()
+                : undefined;
+        const record: AttendanceRecord = {
+            id: `att-manual-${Date.now()}`,
+            staffId: payload.staffId,
+            staff,
+            date: payload.date,
+            status: payload.status,
+            isLate: false,
+            checkInTime: payload.checkInTime,
+            checkOutTime: payload.checkOutTime,
+            workingHours,
+            notes: payload.notes,
+            markedBy: payload.markedBy,
+            outletId: 'outlet-001',
+        };
+        // Replace or push
+        const idx = mockAttendanceRecords.findIndex(
+            r => r.staffId === payload.staffId && r.date === payload.date
+        );
+        if (idx >= 0) {
+            mockAttendanceRecords[idx] = record;
+        } else {
+            mockAttendanceRecords.push(record);
+        }
+        return record;
+    },
+};
+
+export const mockReportsApi = {
+    getSalesReport: async (
+        _outletId: string,
+        dateRange: DateRangeFilter
+    ): Promise<{
+        rows: SalesReportRow[]
+        summary: ReportSummaryCard[]
+        chartData: { date: string; sales: number; bills: number }[]
+    }> => {
+        await delay(400);
+        // Combine current and previous month data for filtering
+        const allData = [...mockSalesReportFeb2026, ...mockSalesReportData];
+        const rows = allData.filter(
+            r => r.date >= dateRange.from && r.date <= dateRange.to
+        );
+        const totalSales = rows.reduce((s, r) => s + r.totalSales, 0);
+        const totalBills = rows.reduce((s, r) => s + r.invoiceCount, 0);
+        const totalDiscount = rows.reduce((s, r) => s + r.totalDiscount, 0);
+        const totalTax = rows.reduce((s, r) => s + r.totalTax, 0);
+
+        const summary: ReportSummaryCard[] = [
+            {
+                label: 'Total Sales',
+                value: formatCurrency(totalSales),
+                change: 9.3,
+                trend: 'up',
+                changeLabel: 'vs last month',
+            },
+            {
+                label: 'Total Bills',
+                value: totalBills.toString(),
+                change: 7.1,
+                trend: 'up',
+            },
+            {
+                label: 'Avg Bill Value',
+                value: formatCurrency(totalBills > 0 ? totalSales / totalBills : 0),
+                change: 2.0,
+                trend: 'up',
+            },
+            {
+                label: 'GST Collected',
+                value: formatCurrency(totalTax),
+                trend: 'flat',
+            },
+            {
+                label: 'Total Discount',
+                value: formatCurrency(totalDiscount),
+                change: -3.2,
+                trend: 'down',
+                color: 'green',
+            },
+        ];
+        return {
+            rows,
+            summary,
+            chartData: rows.map(r => ({
+                date: r.date,
+                sales: r.totalSales,
+                bills: r.invoiceCount,
+            })),
+        };
+    },
+
+    getGSTReport: async (
+        _outletId: string,
+        _dateRange: DateRangeFilter
+    ): Promise<GSTSummary> => {
+        await delay(350);
+        return mockGSTSummary;
+    },
+
+    getStockValuation: async (
+        _outletId: string
+    ): Promise<{
+        rows: StockValuationRow[]
+        totalStockValue: number
+        totalMrpValue: number
+        potentialMarginPct: number
+    }> => {
+        await delay(400);
+        const totalStockValue = mockStockValuation.reduce((s, r) => s + r.stockValue, 0);
+        const totalMrpValue = mockStockValuation.reduce((s, r) => s + r.mrpValue, 0);
+        return {
+            rows: mockStockValuation,
+            totalStockValue,
+            totalMrpValue,
+            potentialMarginPct: parseFloat(
+                ((totalMrpValue - totalStockValue) / totalStockValue * 100).toFixed(1)
+            ),
+        };
+    },
+
+    getExpiryReport: async (
+        _outletId: string
+    ): Promise<ExpiryReportRow[]> => {
+        await delay(300);
+        return [...mockExpiryReport].sort((a, b) => a.daysRemaining - b.daysRemaining);
+    },
+
+    getStaffReport: async (
+        _outletId: string,
+        _dateRange: DateRangeFilter
+    ): Promise<StaffReportRow[]> => {
+        await delay(350);
+        return mockStaffReport;
+    },
+
+    getPurchaseReport: async (
+        _outletId: string,
+        dateRange: DateRangeFilter
+    ): Promise<{
+        rows: PurchaseReportRow[]
+        totalPurchased: number
+        totalOutstanding: number
+        totalPaid: number
+    }> => {
+        await delay(300);
+        const rows = mockPurchaseReport.filter(
+            r => r.date >= dateRange.from && r.date <= dateRange.to
+        );
+        return {
+            rows,
+            totalPurchased: rows.reduce((s, r) => s + r.grandTotal, 0),
+            totalOutstanding: rows.reduce((s, r) => s + r.outstanding, 0),
+            totalPaid: rows.reduce((s, r) => s + r.amountPaid, 0),
+        };
+    },
+};
+
+// ─── In-memory store for accounts (supplements localStorage in the hooks) ─────
+let _runtimePayments: PaymentEntry[] = [...mockPaymentEntries];
+let _runtimeReceipts: ReceiptEntry[] = [];
+let _runtimeExpenses: ExpenseEntry[] = [...mockExpenseEntries];
+
+export const mockAccountsApi = {
+
+    // ── Outstanding ─────────────────────────────────────────────────────────
+
+    getDistributorOutstanding: async (_outletId: string): Promise<DistributorOutstanding[]> => {
+        await delay(400);
+        const today = new Date().toISOString().split('T')[0];
+        const map = new Map<string, DistributorOutstanding>();
+
+        for (const inv of mockPurchaseInvoices) {
+            if (!map.has(inv.distributorId)) {
+                const dist = mockDistributors.find(d => d.id === inv.distributorId);
+                map.set(inv.distributorId, {
+                    distributorId: inv.distributorId,
+                    name: dist?.name ?? inv.distributorId,
+                    gstin: dist?.gstin,
+                    phone: dist?.phone,
+                    totalBills: 0,
+                    paidBills: 0,
+                    overdueBills: 0,
+                    totalOutstanding: 0,
+                    overdueAmount: 0,
+                    oldestDueDate: undefined,
+                });
+            }
+            const entry = map.get(inv.distributorId)!;
+            entry.totalBills++;
+            if (inv.outstanding <= 0) {
+                entry.paidBills++;
+            } else {
+                entry.totalOutstanding += inv.outstanding;
+                const isOverdue = inv.dueDate && inv.dueDate < today;
+                if (isOverdue) {
+                    entry.overdueBills++;
+                    entry.overdueAmount += inv.outstanding;
+                    if (!entry.oldestDueDate || inv.dueDate! < entry.oldestDueDate) {
+                        entry.oldestDueDate = inv.dueDate;
+                    }
+                }
+            }
+        }
+
+        return Array.from(map.values()).filter(e => e.totalOutstanding > 0 || e.totalBills > 0);
+    },
+
+    getCustomerOutstanding: async (_outletId: string): Promise<CustomerOutstanding[]> => {
+        await delay(300);
+        return [...mockCustomerOutstanding];
+    },
+
+    getUnpaidInvoices: async (distributorId: string) => {
+        await delay(300);
+        return mockPurchaseInvoices.filter(
+            inv => inv.distributorId === distributorId && inv.outstanding > 0
+        );
+    },
+
+    // ── Payments ────────────────────────────────────────────────────────────
+
+    createPayment: async (outletId: string, payload: CreatePaymentPayload, createdBy: string): Promise<PaymentEntry> => {
+        await delay(600);
+        const dist = mockDistributors.find(d => d.id === payload.distributorId);
+        const entry: PaymentEntry = {
+            id: `pmt-${Date.now()}`,
+            outletId,
+            distributorId: payload.distributorId,
+            distributor: dist,
+            date: payload.date,
+            totalAmount: payload.totalAmount,
+            paymentMode: payload.paymentMode,
+            referenceNo: payload.referenceNo,
+            notes: payload.notes,
+            allocations: payload.allocations.map(a => {
+                const inv = mockPurchaseInvoices.find(i => i.id === a.purchaseInvoiceId);
+                return {
+                    purchaseInvoiceId: a.purchaseInvoiceId,
+                    invoiceNo: inv?.invoiceNo ?? a.purchaseInvoiceId,
+                    invoiceDate: inv?.invoiceDate ?? '',
+                    invoiceTotal: inv?.grandTotal ?? 0,
+                    currentOutstanding: inv?.outstanding ?? 0,
+                    allocatedAmount: a.allocatedAmount,
+                };
+            }),
+            createdBy,
+            createdAt: new Date().toISOString(),
+        };
+        // Update invoice outstanding
+        for (const alloc of payload.allocations) {
+            const inv = mockPurchaseInvoices.find(i => i.id === alloc.purchaseInvoiceId);
+            if (inv) {
+                inv.outstanding = Math.max(0, inv.outstanding - alloc.allocatedAmount);
+                inv.amountPaid += alloc.allocatedAmount;
+            }
+        }
+        _runtimePayments.unshift(entry);
+        return entry;
+    },
+
+    getPayments: async (outletId: string, distributorId?: string): Promise<PaymentEntry[]> => {
+        await delay(300);
+        return _runtimePayments.filter(p =>
+            p.outletId === outletId &&
+            (distributorId ? p.distributorId === distributorId : true)
+        );
+    },
+
+    // ── Receipts ────────────────────────────────────────────────────────────
+
+    createReceipt: async (outletId: string, payload: CreateReceiptPayload, createdBy: string): Promise<ReceiptEntry> => {
+        await delay(600);
+        const entry: ReceiptEntry = {
+            id: `rct-${Date.now()}`,
+            outletId,
+            customerId: payload.customerId,
+            date: payload.date,
+            totalAmount: payload.totalAmount,
+            paymentMode: payload.paymentMode,
+            referenceNo: payload.referenceNo,
+            notes: payload.notes,
+            allocations: payload.allocations.map(a => ({
+                saleInvoiceId: a.saleInvoiceId,
+                invoiceNo: a.saleInvoiceId,
+                invoiceDate: '',
+                invoiceTotal: 0,
+                currentOutstanding: 0,
+                allocatedAmount: a.allocatedAmount,
+            })),
+            createdBy,
+            createdAt: new Date().toISOString(),
+        };
+        // Reduce customer outstanding
+        const cust = mockCustomerOutstanding.find(c => c.customerId === payload.customerId);
+        if (cust) {
+            cust.totalOutstanding = Math.max(0, cust.totalOutstanding - payload.totalAmount);
+            cust.overdueAmount = Math.max(0, cust.overdueAmount - payload.totalAmount);
+        }
+        _runtimeReceipts.unshift(entry);
+        return entry;
+    },
+
+    getReceipts: async (outletId: string, customerId?: string): Promise<ReceiptEntry[]> => {
+        await delay(300);
+        return _runtimeReceipts.filter(r =>
+            r.outletId === outletId &&
+            (customerId ? r.customerId === customerId : true)
+        );
+    },
+
+    // ── Expenses ────────────────────────────────────────────────────────────
+
+    getExpenses: async (outletId: string, filters?: { from?: string; to?: string; head?: string }): Promise<ExpenseEntry[]> => {
+        await delay(300);
+        let entries = _runtimeExpenses.filter(e => e.outletId === outletId);
+        if (filters?.from) entries = entries.filter(e => e.date >= filters.from!);
+        if (filters?.to)   entries = entries.filter(e => e.date <= filters.to!);
+        if (filters?.head) entries = entries.filter(e => e.expenseHead === filters.head);
+        return entries.sort((a, b) => b.date.localeCompare(a.date));
+    },
+
+    createExpense: async (outletId: string, payload: CreateExpensePayload, createdBy: string): Promise<ExpenseEntry> => {
+        await delay(600);
+        const entry: ExpenseEntry = {
+            id: `exp-${Date.now()}`,
+            outletId,
+            date: payload.date,
+            expenseHead: payload.expenseHead,
+            customHead: payload.customHead,
+            amount: payload.amount,
+            paymentMode: payload.paymentMode,
+            notes: payload.notes,
+            createdBy,
+            createdAt: new Date().toISOString(),
+        };
+        _runtimeExpenses.unshift(entry);
+        return entry;
+    },
+
+    // ── Ledger ──────────────────────────────────────────────────────────────
+
+    getDistributorLedger: async (distributorId: string): Promise<{ openingBalance: number; entries: LedgerEntry[]; closingBalance: number }> => {
+        await delay(400);
+        const purchases = mockPurchaseInvoices
+            .filter(inv => inv.distributorId === distributorId)
+            .sort((a, b) => a.invoiceDate.localeCompare(b.invoiceDate));
+
+        const payments = _runtimePayments
+            .filter(p => p.distributorId === distributorId)
+            .sort((a, b) => a.date.localeCompare(b.date));
+
+        const allEvents: { date: string; type: 'purchase' | 'payment'; ref: any }[] = [
+            ...purchases.map(p => ({ date: p.invoiceDate, type: 'purchase' as const, ref: p })),
+            ...payments.map(p => ({ date: p.date, type: 'payment' as const, ref: p })),
+        ].sort((a, b) => a.date.localeCompare(b.date));
+
+        const openingBalance = 0;
+        let runningBalance = openingBalance;
+        const entries: LedgerEntry[] = allEvents.map((ev, idx) => {
+            if (ev.type === 'purchase') {
+                runningBalance += ev.ref.grandTotal;
+                return {
+                    id: `le-${idx}`,
+                    date: ev.date,
+                    entryType: 'purchase' as const,
+                    referenceNo: ev.ref.invoiceNo,
+                    description: `Purchase Invoice ${ev.ref.invoiceNo}`,
+                    debit: ev.ref.grandTotal,
+                    credit: 0,
+                    balance: runningBalance,
+                };
+            } else {
+                runningBalance -= ev.ref.totalAmount;
+                return {
+                    id: `le-${idx}`,
+                    date: ev.date,
+                    entryType: 'payment' as const,
+                    referenceNo: ev.ref.referenceNo ?? ev.ref.id,
+                    description: `Payment via ${ev.ref.paymentMode}`,
+                    debit: 0,
+                    credit: ev.ref.totalAmount,
+                    balance: runningBalance,
+                };
+            }
+        });
+
+        return { openingBalance, entries, closingBalance: runningBalance };
+    },
+
+    getCustomerLedger: async (customerId: string): Promise<{ openingBalance: number; entries: LedgerEntry[]; closingBalance: number }> => {
+        await delay(400);
+        const receipts = _runtimeReceipts
+            .filter(r => r.customerId === customerId)
+            .sort((a, b) => a.date.localeCompare(b.date));
+
+        const custOut = mockCustomerOutstanding.find(c => c.customerId === customerId);
+        const openingBalance = custOut?.totalOutstanding ?? 0;
+        let runningBalance = openingBalance;
+
+        const entries: LedgerEntry[] = receipts.map((r, idx) => {
+            runningBalance -= r.totalAmount;
+            return {
+                id: `cle-${idx}`,
+                date: r.date,
+                entryType: 'receipt' as const,
+                referenceNo: r.referenceNo ?? r.id,
+                description: `Receipt via ${r.paymentMode}`,
+                debit: 0,
+                credit: r.totalAmount,
+                balance: runningBalance,
+            };
+        });
+
+        return { openingBalance, entries, closingBalance: runningBalance };
     },
 };

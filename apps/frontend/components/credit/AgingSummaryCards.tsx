@@ -31,8 +31,8 @@ export default function AgingSummaryCards({ onBucketClick, activeBucket }: Aging
         {
             key: 'all',
             title: 'Total Outstanding',
-            value: aging.totalOutstanding.amount,
-            count: aging.totalOutstanding.count,
+            value: typeof aging.totalOutstanding === 'number' ? aging.totalOutstanding : (aging.totalOutstanding as any).amount,
+            count: typeof aging.totalOutstanding === 'number' ? undefined : (aging.totalOutstanding as any).count,
             icon: IndianRupee,
             className: 'bg-slate-900 text-white',
             iconBg: 'bg-white/10',

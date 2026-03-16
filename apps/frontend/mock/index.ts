@@ -9,3 +9,6 @@ export * from './dashboard.mock';
 export * from './purchases.mock';
 export * from './doctors.mock';
 export * from './purchase-history.mock';
+export * from './attendance.mock';
+export * from './reports.mock';
+export * from './accounts.mock';

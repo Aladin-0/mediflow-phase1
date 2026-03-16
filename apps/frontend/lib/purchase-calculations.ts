@@ -1,4 +1,4 @@
-import { PurchaseFormItem } from '../types';
+import { PurchaseItemFormData } from '../types';
 
 export function calculatePurchaseItem(item: {
   qty: number
@@ -40,7 +40,7 @@ export function calculatePurchaseItem(item: {
 }
 
 export function calculatePurchaseTotals(
-  items: PurchaseFormItem[]
+  items: PurchaseItemFormData[]
 ): {
   itemCount: number
   totalQty: number

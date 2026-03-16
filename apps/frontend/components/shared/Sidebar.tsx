@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import {
     LayoutDashboard, Receipt, Package, ShoppingCart, Users,
     CreditCard, UserCog, CalendarCheck, BarChart3, Settings,
-    Pill, ChevronLeft, ChevronRight, MoreVertical
+    Pill, ChevronLeft, ChevronRight, MoreVertical, Wallet,
 } from 'lucide-react';
 
 type NavItem = {
@@ -76,6 +76,12 @@ const NAV_ITEMS: NavItem[] = [
         href: '/dashboard/attendance',
         icon: CalendarCheck,
         permission: 'view_outlet' as Permission,
+    },
+    {
+        label: 'Accounts',
+        href: '/dashboard/accounts',
+        icon: Wallet,
+        permission: 'create_purchases' as Permission,
     },
     {
         label: 'Reports',

@@ -1,10 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from 'next/navigation';
 import { purchasesApi, distributorsApi } from '@/lib/apiClient';
 import { CreatePurchasePayload } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 
-export function usePurchaseList(filters?: any) {
+export function usePurchasesList(filters?: any) {
     const outletId = useAuthStore((s) => s.user?.outletId);
     return useQuery({
         queryKey: ['purchases', outletId, filters],
@@ -13,6 +12,9 @@ export function usePurchaseList(filters?: any) {
         enabled: !!outletId,
     });
 }
+
+// Keep backward compat alias
+export const usePurchaseList = usePurchasesList;
 
 export function usePurchaseById(id: string) {
     return useQuery({
@@ -24,34 +26,29 @@ export function usePurchaseById(id: string) {
 
 export function useCreatePurchase() {
     const queryClient = useQueryClient();
-    const router = useRouter();
-
     return useMutation({
-        mutationFn: (payload: CreatePurchasePayload) => purchasesApi.create(payload),
-        onSuccess: (data) => {
+        mutationFn: (payload: CreatePurchasePayload) =>
+            purchasesApi.createPurchase(payload),
+        onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['purchases'] });
             queryClient.invalidateQueries({ queryKey: ['inventory'] });
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-            router.push(`/dashboard/purchases/${data.id}`);
         },
     });
 }
 
 export function useRecordPayment() {
     const queryClient = useQueryClient();
-
     return useMutation({
-        mutationFn: ({ purchaseId, amount }: { purchaseId: string, amount: number }) => 
+        mutationFn: ({ purchaseId, amount }: { purchaseId: string; amount: number }) =>
             purchasesApi.recordPayment(purchaseId, amount),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['purchases'] });
-            queryClient.invalidateQueries({ queryKey: ['dashboard'] });
             queryClient.invalidateQueries({ queryKey: ['distributors'] });
         },
     });
 }
 
-export function useDistributorList() {
+export function useDistributors() {
     const outletId = useAuthStore((s) => s.user?.outletId);
     return useQuery({
         queryKey: ['distributors', outletId],
@@ -61,13 +58,8 @@ export function useDistributorList() {
     });
 }
 
-export function useDistributorLedger(distributorId: string) {
-    return useQuery({
-        queryKey: ['distributors', distributorId, 'ledger'],
-        queryFn: () => distributorsApi.getLedger(distributorId),
-        enabled: !!distributorId,
-    });
-}
+// Keep backward compat alias
+export const useDistributorList = useDistributors;
 
 export function useCreateDistributor() {
     const queryClient = useQueryClient();
@@ -82,7 +74,8 @@ export function useCreateDistributor() {
 export function useUpdateDistributor() {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: ({ id, payload }: { id: string, payload: any }) => distributorsApi.update(id, payload),
+        mutationFn: ({ id, payload }: { id: string; payload: any }) =>
+            distributorsApi.update(id, payload),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['distributors'] });
         },
