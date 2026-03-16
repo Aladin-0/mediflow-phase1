@@ -18,8 +18,16 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework_simplejwt',
     'corsheaders',
     'django.contrib.postgres',
+    # Local apps
+    'apps.core',
+    'apps.accounts',
+    'apps.inventory',
+    'apps.billing',
+    'apps.purchases',
+    'apps.attendance',
 ]
 
 MIDDLEWARE = [
@@ -79,6 +87,7 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+AUTH_USER_MODEL = 'accounts.Staff'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (

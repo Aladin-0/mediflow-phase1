@@ -135,3 +135,63 @@ Copy `.env.example` to `.env`. Key vars:
 - `NEXT_PUBLIC_USE_MOCK=true` — enables mock data
 - `NEXT_PUBLIC_API_URL` — backend URL
 - `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `DJANGO_SETTINGS_MODULE`
+
+
+
+
+## Current Implementation Status
+- ✅ Phase 1 Models - Core: Organization, Outlet, Staff — DONE
+- ✅ Phase 1 Models - Inventory: MasterProduct, Batch — DONE
+- ✅ Phase 1 Models - Billing: SaleInvoice, SaleItem, ScheduleHRegister, Customer, Doctor — DONE
+- ✅ Phase 1 Models - Purchases: Distributor, PurchaseInvoice, PurchaseItem — DONE
+- ✅ Phase 1 Models - Accounts: CreditAccount, CreditTransaction, PaymentEntry, PaymentAllocation, LedgerEntry — DONE
+- ✅ Phase 2 Services - Purchase: atomic_purchase_save — DONE
+- ✅ Phase 2 Services - Sales: fefo_batch_select — DONE
+- ✅ Phase 2 Services - Sales: schedule_h_validate, generate_invoice_number — DONE
+- ✅ Phase 2 Services - Payments: bill_by_bill_payment_allocate — DONE
+- 🔄 Phase 3: API endpoints — IN PROGRESS
+- ✅ POST /api/v1/auth/login/ — DONE
+  - 🔄 GET /api/v1/products/search/ — NEXT
+  - ⏳ GET /api/v1/inventory/
+  - ⏳ POST+GET /api/v1/sales/
+  - ⏳ POST+GET /api/v1/purchases/
+  - ⏳ GET+POST /api/v1/distributors/
+  - ⏳ GET+POST /api/v1/customers/
+  - ⏳ GET /api/v1/distributors/{id}/ledger/
+  - ⏳ POST /api/v1/credit/payment/
+  - ⏳ GET /api/v1/dashboard/daily/
+  - ⏳ POST /api/v1/attendance/check-in/
+- Full plan: docs/plan.md
+
+
+## Backend Architecture Rules
+- All models must use OutletFilteredManager for outletId isolation
+- All business logic goes in apps/backend/api/services/ (NOT in views)
+- All DB mutations must be wrapped in transaction.atomic()
+- Never allow batch stock to go below 0
+- Schedule H/H1/X drugs MUST block sale without Doctor+Patient details
+
+## Django App Structure
+- apps/backend/api/models.py — All models
+- apps/backend/api/services/ — Business logic (one file per domain)
+- apps/backend/api/views/ — API views (thin, only call services)
+- apps/backend/api/serializers/ — DRF serializers
+- apps/backend/api/tests.py — All tests
+
+## API Conventions
+- All endpoints prefixed with /api/v1/
+- JWT auth required on all endpoints except /auth/login/
+- All list endpoints must support ?outletId= filter
+- Response format: { data: [], meta: { total, page } }
+
+## Implementation Order (DO NOT SKIP STEPS)
+Phase 1 (Current): Models only
+Phase 2: Services layer
+Phase 3: API endpoints
+Phase 4: Tests
+Phase 5: Switch USE_MOCK=false
+
+## Key Type Mappings
+- Frontend types live in packages/types/index.ts
+- Every Django model MUST map to a corresponding TypeScript type
+- Never create a model field that doesn't exist in packages/types/index.ts
