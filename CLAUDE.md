@@ -155,11 +155,11 @@ Copy `.env.example` to `.env`. Key vars:
   - ✅ GET+POST /api/v1/customers/ — DONE
   - ✅ GET+POST /api/v1/distributors/ — DONE
   - ✅ GET /api/v1/distributors/{id}/ledger/ — DONE
-    - ✅ GET /api/v1/inventory/ — DONE (55 tests passing)
-  - 🔄 POST /api/v1/sales/ — NEXT (most complex)
-  - ⏳ GET /api/v1/sales/
-  - ⏳ POST+GET /api/v1/purchases/
-  - ⏳ POST /api/v1/credit/payment/
+  - ✅ GET /api/v1/inventory/ — DONE (55 tests passing)
+  - ✅ POST /api/v1/sales/ — DONE (atomic, FEFO, Schedule H, multi-split)
+  - ✅ GET /api/v1/sales/ — DONE
+  - ✅ POST+GET /api/v1/purchases/ — DONE (atomic batch injection, distributor ledger)
+  - 🔄 POST /api/v1/credit/payment/ — NEXT
   - ⏳ GET /api/v1/dashboard/daily/
   - ⏳ POST /api/v1/attendance/check-in/
 - Full plan: docs/plan.md

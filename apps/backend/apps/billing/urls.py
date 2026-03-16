@@ -1,5 +1,5 @@
 from django.urls import path
-from apps.billing.views import SaleCreateView, SaleListView
+from apps.billing.views import SaleCreateView, SaleListView, CustomerCreditPaymentView
 
 # Create a combined view that handles both GET and POST
 class SalesView(SaleListView, SaleCreateView):
@@ -11,4 +11,5 @@ class SalesView(SaleListView, SaleCreateView):
 
 urlpatterns = [
     path('sales/', SalesView.as_view(), name='sale-list-create'),
+    path('credit/payment/', CustomerCreditPaymentView.as_view(), name='credit-payment'),
 ]

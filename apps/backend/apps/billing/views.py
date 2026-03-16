@@ -8,7 +8,7 @@ from rest_framework import status
 from decimal import Decimal
 from datetime import datetime
 
-from apps.billing.models import SaleInvoice, SaleItem, ScheduleHRegister, CreditTransaction, CreditAccount
+from apps.billing.models import SaleInvoice, SaleItem, ScheduleHRegister, CreditTransaction, CreditAccount, LedgerEntry
 from apps.billing.services import (
     fefo_batch_select,
     schedule_h_validate,
@@ -480,3 +480,189 @@ class SaleListView(APIView):
                 'totalRecords': total_records
             }
         }, status=status.HTTP_200_OK)
+
+
+class CustomerCreditPaymentView(APIView):
+    """
+    POST /api/v1/credit/payment/
+
+    Record a customer credit repayment (Udhari collection).
+    Updates CreditAccount.total_outstanding, creates CreditTransaction and LedgerEntry.
+    All operations wrapped in transaction.atomic().
+
+    Request body: RecordCreditPaymentPayload
+    Response: CreditAccount (201 Created) or error (400/404/500)
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        """
+        Record a customer credit repayment.
+
+        Request body:
+        {
+            "creditAccountId": "...",
+            "amount": 1000,
+            "mode": "cash",
+            "reference": "CHQ12345",
+            "notes": "Payment received",
+            "paymentDate": "2026-03-17"
+        }
+
+        Returns:
+        {
+            "id": "...",
+            "customerId": "...",
+            "customer": {...},
+            "outletId": "...",
+            "creditLimit": 5000,
+            "totalOutstanding": 500,
+            "totalBorrowed": 2000,
+            "totalRepaid": 1500,
+            "status": "partial",
+            "lastTransactionDate": "2026-03-17T...",
+            "createdAt": "2026-03-17T..."
+        }
+        """
+
+        try:
+            payload = request.data
+            credit_account_id = payload.get('creditAccountId')
+            outlet_id = request.query_params.get('outletId') or payload.get('outletId')
+            created_by_id = request.user.id  # From JWT token
+            amount = Decimal(str(payload.get('amount', 0)))
+            payment_mode = payload.get('mode') or payload.get('paymentMode')
+            reference_no = payload.get('reference')
+            notes = payload.get('notes')
+            payment_date = payload.get('paymentDate')
+
+            # Validate outlet
+            try:
+                outlet = Outlet.objects.get(id=outlet_id)
+            except Outlet.DoesNotExist:
+                logger.warning(f"Outlet {outlet_id} not found")
+                return Response(
+                    {'error': {'code': 'OUTLET_NOT_FOUND', 'message': f'Outlet {outlet_id} not found'}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Validate credit account
+            try:
+                credit_account = CreditAccount.objects.get(id=credit_account_id, outlet=outlet)
+            except CreditAccount.DoesNotExist:
+                logger.warning(f"Credit account {credit_account_id} not found for outlet {outlet_id}")
+                return Response(
+                    {'error': {'code': 'ACCOUNT_NOT_FOUND', 'message': 'Credit account not found'}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Validate amount
+            if amount <= 0:
+                return Response(
+                    {'error': {'code': 'INVALID_AMOUNT', 'message': 'Amount must be greater than 0'}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if amount > credit_account.total_outstanding:
+                logger.warning(f"Overpayment: trying to pay {amount}, outstanding is {credit_account.total_outstanding}")
+                return Response(
+                    {'error': {'code': 'OVERPAYMENT', 'message': f'Amount exceeds outstanding ₹{credit_account.total_outstanding}'}},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            logger.info(f"Recording credit payment from {credit_account.customer.name}: ₹{amount}")
+
+            # Use transaction.atomic() for consistency
+            with transaction.atomic():
+                # Step 1: Update CreditAccount
+                credit_account.total_outstanding -= amount
+                credit_account.total_repaid += amount
+
+                # Update status based on outstanding
+                if credit_account.total_outstanding <= 0:
+                    credit_account.status = 'cleared'
+                elif credit_account.total_outstanding < credit_account.total_borrowed:
+                    credit_account.status = 'partial'
+
+                credit_account.last_transaction_date = timezone.now()
+                credit_account.save()
+
+                logger.info(f"Updated CreditAccount: outstanding={credit_account.total_outstanding}, status={credit_account.status}")
+
+                # Step 2: Create CreditTransaction
+                credit_transaction = CreditTransaction.objects.create(
+                    credit_account=credit_account,
+                    customer=credit_account.customer,
+                    type='credit',
+                    amount=amount,
+                    description=f"Payment via {payment_mode or 'cash'}",
+                    balance_after=credit_account.total_outstanding,
+                    recorded_by_id=created_by_id,
+                    date=datetime.fromisoformat(payment_date).date() if payment_date else None,
+                )
+
+                logger.info(f"Created CreditTransaction {credit_transaction.id}")
+
+                # Step 3: Create LedgerEntry for customer
+                # Query last ledger entry to calculate running balance
+                last_ledger = LedgerEntry.objects.filter(
+                    outlet=outlet,
+                    customer=credit_account.customer,
+                    entity_type='customer',
+                ).order_by('-date', '-created_at').first()
+
+                if last_ledger:
+                    running_balance = last_ledger.running_balance - amount
+                else:
+                    running_balance = -amount
+
+                ledger_entry = LedgerEntry.objects.create(
+                    outlet=outlet,
+                    entity_type='customer',
+                    customer=credit_account.customer,
+                    date=datetime.fromisoformat(payment_date).date() if payment_date else timezone.now().date(),
+                    entry_type='receipt',
+                    reference_no=reference_no or str(credit_transaction.id)[:20],
+                    description=f"Credit payment from {credit_account.customer.name}",
+                    debit=Decimal('0'),
+                    credit=amount,
+                    running_balance=running_balance,
+                )
+
+                logger.info(f"Created LedgerEntry with running_balance={running_balance}")
+
+            # Serialize response matching CreditAccount shape
+            result = self._serialize_credit_account(credit_account)
+            return Response(result, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Unexpected error recording credit payment: {e}", exc_info=True)
+            return Response(
+                {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to record payment'}},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _serialize_credit_account(self, credit_account):
+        """Serialize CreditAccount to response shape."""
+        return {
+            'id': str(credit_account.id),
+            'customerId': str(credit_account.customer_id),
+            'customer': {
+                'id': str(credit_account.customer.id),
+                'name': credit_account.customer.name,
+                'phone': credit_account.customer.phone,
+                'email': credit_account.customer.email,
+                'address': credit_account.customer.address,
+                'city': credit_account.customer.city,
+                'state': credit_account.customer.state,
+            },
+            'outletId': str(credit_account.outlet_id),
+            'creditLimit': float(credit_account.credit_limit),
+            'totalOutstanding': float(credit_account.total_outstanding),
+            'totalBorrowed': float(credit_account.total_borrowed),
+            'totalRepaid': float(credit_account.total_repaid),
+            'status': credit_account.status,
+            'lastTransactionDate': credit_account.last_transaction_date.isoformat() if credit_account.last_transaction_date else None,
+            'createdAt': credit_account.created_at.isoformat(),
+        }

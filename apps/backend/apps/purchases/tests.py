@@ -10,7 +10,7 @@ from apps.core.models import Organization, Outlet
 from apps.accounts.models import Staff
 from apps.purchases.models import Distributor, PurchaseInvoice, PurchaseItem
 from apps.inventory.models import MasterProduct, Batch
-from apps.billing.models import LedgerEntry
+from apps.billing.models import LedgerEntry, PaymentEntry
 
 
 class DistributorListViewTestCase(TestCase):
@@ -934,3 +934,267 @@ class PurchaseListViewTestCase(TestCase):
         ]
         for field in required_fields:
             self.assertIn(field, invoice, f"Missing field: {field}")
+
+
+class DistributorPaymentViewTestCase(TestCase):
+    """Test suite for DistributorPaymentView endpoint (POST /api/v1/purchases/payments/)."""
+
+    def setUp(self):
+        """Create test data: organization, outlet, staff, distributor, invoices."""
+        self.client = APIClient()
+
+        # Create organization
+        self.org = Organization.objects.create(
+            name="Test Pharmacy Chain",
+            slug="test-pharmacy",
+            plan="pro",
+            is_active=True
+        )
+
+        # Create outlet
+        self.outlet = Outlet.objects.create(
+            organization=self.org,
+            name="Test Outlet",
+            address="123 Main St",
+            city="Mumbai",
+            state="Maharashtra",
+            pincode="400001",
+            gstin="27AAPCT1234E1Z0",
+            drug_license_no=f"DLN-{uuid.uuid4().hex[:12].upper()}",
+            phone="9876543210",
+            is_active=True
+        )
+
+        # Create staff member for authentication
+        self.staff = Staff.objects.create(
+            phone="9876543210",
+            name="Rajesh Patil",
+            outlet=self.outlet,
+            role="super_admin",
+            staff_pin="0000",
+            is_active=True
+        )
+
+        # Create distributor
+        self.distributor = Distributor.objects.create(
+            outlet=self.outlet,
+            name="ABC Pharma",
+            gstin="27AABCT1234E1Z0",
+            phone="9999888877",
+            email="abc@pharma.com",
+            address="456 Distributor Lane",
+            city="Mumbai",
+            state="Maharashtra",
+            credit_days=30,
+            opening_balance=10000.0,
+            balance_type="CR",
+            is_active=True
+        )
+
+        # Create purchase invoices
+        self.invoice1 = PurchaseInvoice.objects.create(
+            outlet=self.outlet,
+            distributor=self.distributor,
+            invoice_no="PU-001",
+            invoice_date=date(2026, 3, 10),
+            due_date=date(2026, 4, 9),
+            purchase_type="credit",
+            godown="main",
+            subtotal=Decimal("1000.00"),
+            discount_amount=Decimal("0.00"),
+            taxable_amount=Decimal("1000.00"),
+            gst_amount=Decimal("180.00"),
+            cess_amount=Decimal("0.00"),
+            freight=Decimal("0.00"),
+            round_off=Decimal("0.00"),
+            grand_total=Decimal("1180.00"),
+            amount_paid=Decimal("0.00"),
+            outstanding=Decimal("1180.00"),
+            created_by=self.staff,
+        )
+
+        self.invoice2 = PurchaseInvoice.objects.create(
+            outlet=self.outlet,
+            distributor=self.distributor,
+            invoice_no="PU-002",
+            invoice_date=date(2026, 3, 12),
+            due_date=date(2026, 4, 11),
+            purchase_type="credit",
+            godown="main",
+            subtotal=Decimal("2000.00"),
+            discount_amount=Decimal("0.00"),
+            taxable_amount=Decimal("2000.00"),
+            gst_amount=Decimal("360.00"),
+            cess_amount=Decimal("0.00"),
+            freight=Decimal("0.00"),
+            round_off=Decimal("0.00"),
+            grand_total=Decimal("2360.00"),
+            amount_paid=Decimal("0.00"),
+            outstanding=Decimal("2360.00"),
+            created_by=self.staff,
+        )
+
+    def test_payment_requires_authentication(self):
+        """Verify JWT authentication is required."""
+        payload = {
+            "distributorId": str(self.distributor.id),
+            "date": "2026-03-17",
+            "totalAmount": 1000,
+            "paymentMode": "cash",
+            "allocations": []
+        }
+        response = self.client.post(f"/api/v1/purchases/payments/?outletId={self.outlet.id}", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_record_payment_success(self):
+        """Verify successful payment recording with allocation."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        payload = {
+            "distributorId": str(self.distributor.id),
+            "date": "2026-03-17",
+            "totalAmount": 1000,
+            "paymentMode": "cash",
+            "referenceNo": "CHQ12345",
+            "notes": "Payment for invoices",
+            "allocations": [
+                {
+                    "purchaseInvoiceId": str(self.invoice1.id),
+                    "allocatedAmount": 1000
+                }
+            ]
+        }
+
+        response = self.client.post(
+            f"/api/v1/purchases/payments/?outletId={self.outlet.id}",
+            payload,
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # Verify response structure
+        result = response.data
+        self.assertIn("id", result)
+        self.assertEqual(result["distributorId"], str(self.distributor.id))
+        self.assertEqual(result["totalAmount"], 1000)
+        self.assertEqual(result["paymentMode"], "cash")
+        self.assertEqual(len(result["allocations"]), 1)
+
+        # Verify invoice outstanding was updated
+        invoice = PurchaseInvoice.objects.get(id=self.invoice1.id)
+        self.assertEqual(float(invoice.outstanding), 180.0)  # 1180 - 1000
+        self.assertEqual(float(invoice.amount_paid), 1000.0)
+
+    def test_record_payment_with_invalid_outlet(self):
+        """Verify 404 when outlet does not exist."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        fake_outlet_id = uuid.uuid4()
+        payload = {
+            "distributorId": str(self.distributor.id),
+            "date": "2026-03-17",
+            "totalAmount": 1000,
+            "paymentMode": "cash",
+            "allocations": []
+        }
+
+        response = self.client.post(
+            f"/api/v1/purchases/payments/?outletId={fake_outlet_id}",
+            payload,
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("error", response.data)
+
+    def test_record_payment_overpayment_error(self):
+        """Verify overpayment error when trying to allocate more than outstanding."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        payload = {
+            "distributorId": str(self.distributor.id),
+            "date": "2026-03-17",
+            "totalAmount": 5000,  # More than total outstanding
+            "paymentMode": "cash",
+            "allocations": [
+                {
+                    "purchaseInvoiceId": str(self.invoice1.id),
+                    "allocatedAmount": 5000  # More than invoice outstanding (1180)
+                }
+            ]
+        }
+
+        response = self.client.post(
+            f"/api/v1/purchases/payments/?outletId={self.outlet.id}",
+            payload,
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
+
+    def test_record_payment_response_structure(self):
+        """Verify response includes all required payment fields."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        payload = {
+            "distributorId": str(self.distributor.id),
+            "date": "2026-03-17",
+            "totalAmount": 1000,
+            "paymentMode": "upi",
+            "referenceNo": "UTR12345",
+            "notes": "Online payment",
+            "allocations": [
+                {
+                    "purchaseInvoiceId": str(self.invoice1.id),
+                    "allocatedAmount": 1000
+                }
+            ]
+        }
+
+        response = self.client.post(
+            f"/api/v1/purchases/payments/?outletId={self.outlet.id}",
+            payload,
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        result = response.data
+        required_fields = [
+            "id", "outletId", "distributorId", "distributor", "date",
+            "totalAmount", "paymentMode", "referenceNo", "notes",
+            "allocations", "createdBy", "createdAt"
+        ]
+        for field in required_fields:
+            self.assertIn(field, result, f"Missing field: {field}")
+
+        # Verify allocation structure
+        allocation = result["allocations"][0]
+        allocation_fields = [
+            "purchaseInvoiceId", "invoiceNo", "invoiceDate",
+            "invoiceTotal", "currentOutstanding", "allocatedAmount"
+        ]
+        for field in allocation_fields:
+            self.assertIn(field, allocation, f"Missing allocation field: {field}")

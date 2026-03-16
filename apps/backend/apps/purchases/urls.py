@@ -5,6 +5,7 @@ from apps.purchases.views import (
     DistributorLedgerView,
     PurchaseCreateView,
     PurchaseListView,
+    DistributorPaymentView,
 )
 
 
@@ -19,6 +20,7 @@ class PurchasesView(PurchaseListView, PurchaseCreateView):
 
 urlpatterns = [
     path('', PurchasesView.as_view(), name='purchase-list-create'),
+    path('payments/', DistributorPaymentView.as_view(), name='distributor-payment'),
     path('distributors/', DistributorListView.as_view(), name='distributor-list'),
     path('distributors/<uuid:distributor_id>/', DistributorDetailView.as_view(), name='distributor-detail'),
     path('distributors/<uuid:distributor_id>/ledger/', DistributorLedgerView.as_view(), name='distributor-ledger'),

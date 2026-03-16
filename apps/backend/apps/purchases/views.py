@@ -8,9 +8,9 @@ from rest_framework import status
 from django.db.models import Q
 
 from apps.purchases.models import Distributor, PurchaseInvoice
-from apps.billing.models import LedgerEntry
+from apps.billing.models import LedgerEntry, PaymentEntry, PaymentAllocation
 from apps.core.models import Outlet
-from apps.purchases.services import atomic_purchase_save, PurchaseServiceError
+from apps.purchases.services import atomic_purchase_save, PurchaseServiceError, bill_by_bill_payment_allocate, OverpaymentError
 
 logger = logging.getLogger(__name__)
 
@@ -655,4 +655,156 @@ class PurchaseListView(APIView):
             'amountPaid': float(purchase_invoice.amount_paid),
             'outstanding': float(purchase_invoice.outstanding),
             'createdAt': purchase_invoice.created_at.isoformat(),
+        }
+
+
+class DistributorPaymentView(APIView):
+    """
+    POST /api/v1/purchases/payments/
+
+    Record a payment to a distributor with bill-by-bill allocation.
+    All operations wrapped in transaction.atomic() — full rollback on any failure.
+
+    Request body: CreatePaymentPayload
+    Response: PaymentEntry (201 Created) or error (400/404/500)
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        """
+        Record a payment to a distributor.
+
+        Request body:
+        {
+            "distributorId": "...",
+            "date": "2026-03-17",
+            "totalAmount": 1000,
+            "paymentMode": "cash",
+            "referenceNo": "CHQ12345",
+            "notes": "Payment for invoices PU-001 and PU-002",
+            "allocations": [
+                {
+                    "purchaseInvoiceId": "...",
+                    "allocatedAmount": 500
+                },
+                {
+                    "purchaseInvoiceId": "...",
+                    "allocatedAmount": 500
+                }
+            ]
+        }
+
+        Returns:
+        {
+            "id": "...",
+            "outletId": "...",
+            "distributorId": "...",
+            "distributor": {...},
+            "date": "2026-03-17",
+            "totalAmount": 1000,
+            "paymentMode": "cash",
+            "referenceNo": "CHQ12345",
+            "notes": "...",
+            "allocations": [
+                {
+                    "purchaseInvoiceId": "...",
+                    "invoiceNo": "PU-001",
+                    "invoiceDate": "2026-03-10",
+                    "invoiceTotal": 1000,
+                    "currentOutstanding": 1000,
+                    "allocatedAmount": 500
+                }
+            ],
+            "createdBy": "...",
+            "createdAt": "2026-03-17T..."
+        }
+        """
+
+        try:
+            payload = request.data
+            outlet_id = request.query_params.get('outletId') or payload.get('outletId')
+            created_by_id = request.user.id  # From JWT token
+
+            # Validate outlet exists
+            try:
+                outlet = Outlet.objects.get(id=outlet_id)
+            except Outlet.DoesNotExist:
+                logger.warning(f"Outlet {outlet_id} not found")
+                return Response(
+                    {'error': {'code': 'OUTLET_NOT_FOUND', 'message': f'Outlet {outlet_id} not found'}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            logger.info(f"Recording payment for outlet {outlet.name}")
+
+            # Call bill_by_bill_payment_allocate service (wraps entire transaction)
+            payment_entry = bill_by_bill_payment_allocate(payload, outlet_id, created_by_id)
+
+            logger.info(f"Created PaymentEntry {payment_entry.id}")
+
+            # Serialize response matching PaymentEntry shape
+            result = self._serialize_payment_entry(payment_entry)
+            return Response(result, status=status.HTTP_201_CREATED)
+
+        except OverpaymentError as e:
+            logger.warning(f"Overpayment error: {str(e)}")
+            return Response(
+                {'error': {'code': 'OVERPAYMENT_ERROR', 'message': str(e)}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except PurchaseServiceError as e:
+            logger.warning(f"Purchase service error: {str(e)}")
+            return Response(
+                {'error': {'code': 'PAYMENT_ERROR', 'message': str(e)}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error recording payment: {e}", exc_info=True)
+            return Response(
+                {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to record payment'}},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _serialize_payment_entry(self, payment_entry):
+        """Serialize PaymentEntry to response shape."""
+        return {
+            'id': str(payment_entry.id),
+            'outletId': str(payment_entry.outlet_id),
+            'distributorId': str(payment_entry.distributor_id),
+            'distributor': {
+                'id': str(payment_entry.distributor.id),
+                'name': payment_entry.distributor.name,
+                'gstin': payment_entry.distributor.gstin,
+                'drugLicenseNo': payment_entry.distributor.drug_license_no,
+                'phone': payment_entry.distributor.phone,
+                'email': payment_entry.distributor.email,
+                'address': payment_entry.distributor.address,
+                'city': payment_entry.distributor.city,
+                'state': payment_entry.distributor.state,
+                'creditDays': payment_entry.distributor.credit_days,
+                'openingBalance': float(payment_entry.distributor.opening_balance) if payment_entry.distributor.opening_balance else 0,
+                'balanceType': payment_entry.distributor.balance_type,
+                'isActive': payment_entry.distributor.is_active,
+                'createdAt': payment_entry.distributor.created_at.isoformat(),
+            },
+            'date': payment_entry.date.isoformat(),
+            'totalAmount': float(payment_entry.total_amount),
+            'paymentMode': payment_entry.payment_mode,
+            'referenceNo': payment_entry.reference_no,
+            'notes': payment_entry.notes,
+            'allocations': [self._serialize_allocation(alloc) for alloc in payment_entry.allocations.all()],
+            'createdBy': payment_entry.created_by.id if payment_entry.created_by else None,
+            'createdAt': payment_entry.created_at.isoformat(),
+        }
+
+    def _serialize_allocation(self, allocation):
+        """Serialize PaymentAllocation to response shape."""
+        return {
+            'purchaseInvoiceId': str(allocation.invoice_id),
+            'invoiceNo': allocation.invoice_no,
+            'invoiceDate': allocation.invoice_date.isoformat(),
+            'invoiceTotal': float(allocation.invoice_total),
+            'currentOutstanding': float(allocation.current_outstanding),
+            'allocatedAmount': float(allocation.allocated_amount),
         }
