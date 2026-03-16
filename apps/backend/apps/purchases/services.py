@@ -149,7 +149,7 @@ def atomic_purchase_save(payload: Dict[str, Any], outlet_id: str, created_by_id:
                         outlet=outlet,
                         batch_no=batch_no,
                         expiry_date=expiry_date,
-                        master_product=master_product
+                        product=master_product
                     )
                     # Merge: add to existing batch
                     batch.qty_strips += int(item_payload['actualQty'])
@@ -159,10 +159,12 @@ def atomic_purchase_save(payload: Dict[str, Any], outlet_id: str, created_by_id:
                     # Create new batch
                     batch = Batch.objects.create(
                         outlet=outlet,
-                        master_product=master_product,
+                        product=master_product,
                         batch_no=batch_no,
                         expiry_date=expiry_date,
                         mrp=Decimal(str(item_payload['mrp'])),
+                        purchase_rate=Decimal(str(item_payload['purchaseRate'])),
+                        sale_rate=Decimal(str(item_payload['saleRate'])),
                         qty_strips=int(item_payload['actualQty']),
                         qty_loose=0,
                         rack_location='',

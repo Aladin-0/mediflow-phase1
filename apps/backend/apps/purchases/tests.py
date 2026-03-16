@@ -2,12 +2,14 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 import uuid
 
 from apps.core.models import Organization, Outlet
 from apps.accounts.models import Staff
-from apps.purchases.models import Distributor
+from apps.purchases.models import Distributor, PurchaseInvoice, PurchaseItem
+from apps.inventory.models import MasterProduct, Batch
 from apps.billing.models import LedgerEntry
 
 
@@ -406,3 +408,529 @@ class DistributorLedgerViewTestCase(TestCase):
         ]
         for field in required_fields:
             self.assertIn(field, entry, f"Missing field: {field}")
+
+
+class PurchaseCreateViewTestCase(TestCase):
+    """Test suite for PurchaseCreateView endpoint (POST /api/v1/purchases/)."""
+
+    def setUp(self):
+        """Create test data: organization, outlet, staff, distributor, product, batch."""
+        self.client = APIClient()
+
+        # Create organization
+        self.org = Organization.objects.create(
+            name="Test Pharmacy Chain",
+            slug="test-pharmacy",
+            plan="pro",
+            is_active=True
+        )
+
+        # Create outlet
+        self.outlet = Outlet.objects.create(
+            organization=self.org,
+            name="Test Outlet",
+            address="123 Main St",
+            city="Mumbai",
+            state="Maharashtra",
+            pincode="400001",
+            gstin="27AAPCT1234E1Z0",
+            drug_license_no=f"DLN-{uuid.uuid4().hex[:12].upper()}",
+            phone="9876543210",
+            is_active=True
+        )
+
+        # Create staff member for authentication
+        self.staff = Staff.objects.create(
+            phone="9876543210",
+            name="Rajesh Patil",
+            outlet=self.outlet,
+            role="super_admin",
+            staff_pin="0000",
+            is_active=True
+        )
+
+        # Create distributor
+        self.distributor = Distributor.objects.create(
+            outlet=self.outlet,
+            name="ABC Pharma",
+            gstin="27AABCT1234E1Z0",
+            phone="9999888877",
+            email="abc@pharma.com",
+            address="456 Distributor Lane",
+            city="Mumbai",
+            state="Maharashtra",
+            credit_days=30,
+            opening_balance=10000.0,
+            balance_type="CR",
+            is_active=True
+        )
+
+        # Create master product
+        self.product = MasterProduct.objects.create(
+            name="Dolo 650 Tablet",
+            composition="Paracetamol 650mg",
+            manufacturer="Micro Labs",
+            category="Pain Relief",
+            drug_type="allopathy",
+            schedule_type="OTC",
+            hsn_code="3004",
+            gst_rate=Decimal("5.00"),
+            pack_size=10,
+            pack_unit="Strips",
+            pack_type="Blister",
+            is_fridge=False,
+            is_discontinued=False
+        )
+
+    def test_create_requires_authentication(self):
+        """Verify JWT authentication is required."""
+        payload = {
+            "outletId": str(self.outlet.id),
+            "distributorId": str(self.distributor.id),
+            "purchaseType": "credit",
+            "invoiceNo": "PU-001",
+            "invoiceDate": "2026-03-17",
+            "dueDate": "2026-04-16",
+            "godown": "main",
+            "freight": 0,
+            "subtotal": 1000,
+            "discountAmount": 0,
+            "taxableAmount": 1000,
+            "gstAmount": 180,
+            "cessAmount": 0,
+            "roundOff": 0,
+            "grandTotal": 1180,
+            "items": []
+        }
+        response = self.client.post("/api/v1/purchases/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_create_purchase_success(self):
+        """Verify successful purchase creation."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        payload = {
+            "outletId": str(self.outlet.id),
+            "distributorId": str(self.distributor.id),
+            "purchaseType": "credit",
+            "invoiceNo": f"PU-{uuid.uuid4().hex[:6].upper()}",
+            "invoiceDate": "2026-03-17",
+            "dueDate": "2026-04-16",
+            "godown": "main",
+            "freight": 0,
+            "subtotal": 1000,
+            "discountAmount": 0,
+            "taxableAmount": 1000,
+            "gstAmount": 180,
+            "cessAmount": 0,
+            "roundOff": 0,
+            "grandTotal": 1180,
+            "items": [
+                {
+                    "masterProductId": str(self.product.id),
+                    "customProductName": None,
+                    "isCustomProduct": False,
+                    "hsnCode": "3004",
+                    "batchNo": "BATCH001",
+                    "expiryDate": "2026-12-31",
+                    "pkg": 10,
+                    "qty": 10,
+                    "actualQty": 100,
+                    "freeQty": 0,
+                    "purchaseRate": 10,
+                    "discountPct": 0,
+                    "cashDiscountPct": 0,
+                    "gstRate": 5,
+                    "cess": 0,
+                    "mrp": 15,
+                    "ptr": 12,
+                    "pts": 11,
+                    "saleRate": 14,
+                    "taxableAmount": 1000,
+                    "gstAmount": 180,
+                    "cessAmount": 0,
+                    "totalAmount": 1180
+                }
+            ]
+        }
+
+        response = self.client.post("/api/v1/purchases/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        # Verify response structure
+        result = response.data
+        self.assertIn("id", result)
+        self.assertIn("invoiceNo", result)
+        self.assertEqual(result["distributorId"], str(self.distributor.id))
+        self.assertEqual(result["grandTotal"], 1180)
+        self.assertEqual(result["amountPaid"], 0)
+        self.assertEqual(result["outstanding"], 1180)
+
+        # Verify invoice was created in DB
+        invoice = PurchaseInvoice.objects.get(id=result["id"])
+        self.assertEqual(invoice.invoice_no, payload["invoiceNo"])
+        self.assertEqual(invoice.outlet_id, self.outlet.id)
+        self.assertEqual(invoice.distributor_id, self.distributor.id)
+
+    def test_create_with_invalid_outlet(self):
+        """Verify 404 when outlet does not exist."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        fake_outlet_id = uuid.uuid4()
+        payload = {
+            "outletId": str(fake_outlet_id),
+            "distributorId": str(self.distributor.id),
+            "purchaseType": "credit",
+            "invoiceNo": "PU-999",
+            "invoiceDate": "2026-03-17",
+            "dueDate": "2026-04-16",
+            "godown": "main",
+            "freight": 0,
+            "subtotal": 1000,
+            "discountAmount": 0,
+            "taxableAmount": 1000,
+            "gstAmount": 180,
+            "cessAmount": 0,
+            "roundOff": 0,
+            "grandTotal": 1180,
+            "items": []
+        }
+
+        response = self.client.post("/api/v1/purchases/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("error", response.data)
+
+    def test_create_response_structure(self):
+        """Verify response includes all required invoice fields."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        payload = {
+            "outletId": str(self.outlet.id),
+            "distributorId": str(self.distributor.id),
+            "purchaseType": "credit",
+            "invoiceNo": f"PU-{uuid.uuid4().hex[:6].upper()}",
+            "invoiceDate": "2026-03-17",
+            "dueDate": "2026-04-16",
+            "godown": "main",
+            "freight": 0,
+            "subtotal": 1000,
+            "discountAmount": 0,
+            "taxableAmount": 1000,
+            "gstAmount": 180,
+            "cessAmount": 0,
+            "roundOff": 0,
+            "grandTotal": 1180,
+            "items": [
+                {
+                    "masterProductId": str(self.product.id),
+                    "customProductName": None,
+                    "isCustomProduct": False,
+                    "hsnCode": "3004",
+                    "batchNo": "BATCH002",
+                    "expiryDate": "2026-12-31",
+                    "pkg": 10,
+                    "qty": 10,
+                    "actualQty": 100,
+                    "freeQty": 0,
+                    "purchaseRate": 10,
+                    "discountPct": 0,
+                    "cashDiscountPct": 0,
+                    "gstRate": 5,
+                    "cess": 0,
+                    "mrp": 15,
+                    "ptr": 12,
+                    "pts": 11,
+                    "saleRate": 14,
+                    "taxableAmount": 1000,
+                    "gstAmount": 180,
+                    "cessAmount": 0,
+                    "totalAmount": 1180
+                }
+            ]
+        }
+
+        response = self.client.post("/api/v1/purchases/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        result = response.data
+        required_fields = [
+            "id", "outletId", "distributorId", "distributor", "invoiceNo",
+            "invoiceDate", "dueDate", "purchaseType", "godown", "subtotal",
+            "discountAmount", "taxableAmount", "gstAmount", "cessAmount",
+            "freight", "roundOff", "grandTotal", "amountPaid", "outstanding",
+            "items", "createdByName", "createdAt"
+        ]
+        for field in required_fields:
+            self.assertIn(field, result, f"Missing field: {field}")
+
+
+class PurchaseListViewTestCase(TestCase):
+    """Test suite for PurchaseListView endpoint (GET /api/v1/purchases/)."""
+
+    def setUp(self):
+        """Create test data: organization, outlet, staff, distributors, invoices."""
+        self.client = APIClient()
+
+        # Create organization
+        self.org = Organization.objects.create(
+            name="Test Pharmacy Chain",
+            slug="test-pharmacy",
+            plan="pro",
+            is_active=True
+        )
+
+        # Create outlet
+        self.outlet = Outlet.objects.create(
+            organization=self.org,
+            name="Test Outlet",
+            address="123 Main St",
+            city="Mumbai",
+            state="Maharashtra",
+            pincode="400001",
+            gstin="27AAPCT1234E1Z0",
+            drug_license_no=f"DLN-{uuid.uuid4().hex[:12].upper()}",
+            phone="9876543210",
+            is_active=True
+        )
+
+        # Create staff member for authentication
+        self.staff = Staff.objects.create(
+            phone="9876543210",
+            name="Rajesh Patil",
+            outlet=self.outlet,
+            role="super_admin",
+            staff_pin="0000",
+            is_active=True
+        )
+
+        # Create distributors
+        self.dist1 = Distributor.objects.create(
+            outlet=self.outlet,
+            name="ABC Pharma",
+            gstin="27AABCT1234E1Z0",
+            phone="9999888877",
+            email="abc@pharma.com",
+            address="456 Distributor Lane",
+            city="Mumbai",
+            state="Maharashtra",
+            credit_days=30,
+            opening_balance=10000.0,
+            balance_type="CR",
+            is_active=True
+        )
+
+        self.dist2 = Distributor.objects.create(
+            outlet=self.outlet,
+            name="XYZ Supplies",
+            gstin="27AXYZT1234E1Z0",
+            phone="8888777766",
+            email="xyz@supplies.com",
+            address="789 Supplier Ave",
+            city="Pune",
+            state="Maharashtra",
+            credit_days=45,
+            opening_balance=0,
+            balance_type="DR",
+            is_active=True
+        )
+
+        # Create purchase invoices
+        self.invoice1 = PurchaseInvoice.objects.create(
+            outlet=self.outlet,
+            distributor=self.dist1,
+            invoice_no="PU-001",
+            invoice_date=date(2026, 3, 10),
+            due_date=date(2026, 4, 9),
+            purchase_type="credit",
+            godown="main",
+            subtotal=Decimal("1000.00"),
+            discount_amount=Decimal("0.00"),
+            taxable_amount=Decimal("1000.00"),
+            gst_amount=Decimal("180.00"),
+            cess_amount=Decimal("0.00"),
+            freight=Decimal("0.00"),
+            round_off=Decimal("0.00"),
+            grand_total=Decimal("1180.00"),
+            amount_paid=Decimal("0.00"),
+            outstanding=Decimal("1180.00"),
+            created_by=self.staff,
+        )
+
+        self.invoice2 = PurchaseInvoice.objects.create(
+            outlet=self.outlet,
+            distributor=self.dist1,
+            invoice_no="PU-002",
+            invoice_date=date(2026, 3, 15),
+            due_date=date(2026, 4, 14),
+            purchase_type="credit",
+            godown="main",
+            subtotal=Decimal("2000.00"),
+            discount_amount=Decimal("0.00"),
+            taxable_amount=Decimal("2000.00"),
+            gst_amount=Decimal("360.00"),
+            cess_amount=Decimal("0.00"),
+            freight=Decimal("0.00"),
+            round_off=Decimal("0.00"),
+            grand_total=Decimal("2360.00"),
+            amount_paid=Decimal("500.00"),
+            outstanding=Decimal("1860.00"),
+            created_by=self.staff,
+        )
+
+        self.invoice3 = PurchaseInvoice.objects.create(
+            outlet=self.outlet,
+            distributor=self.dist2,
+            invoice_no="PU-003",
+            invoice_date=date(2026, 3, 12),
+            due_date=date(2026, 4, 26),
+            purchase_type="credit",
+            godown="cold_storage",
+            subtotal=Decimal("3000.00"),
+            discount_amount=Decimal("0.00"),
+            taxable_amount=Decimal("3000.00"),
+            gst_amount=Decimal("540.00"),
+            cess_amount=Decimal("0.00"),
+            freight=Decimal("0.00"),
+            round_off=Decimal("0.00"),
+            grand_total=Decimal("3540.00"),
+            amount_paid=Decimal("0.00"),
+            outstanding=Decimal("3540.00"),
+            created_by=self.staff,
+        )
+
+    def test_list_requires_authentication(self):
+        """Verify JWT authentication is required."""
+        response = self.client.get(f"/api/v1/purchases/?outletId={self.outlet.id}")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_list_all_invoices(self):
+        """Verify list returns all invoices for outlet."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        response = self.client.get(f"/api/v1/purchases/?outletId={self.outlet.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("data", response.data)
+        self.assertIn("pagination", response.data)
+        self.assertEqual(len(response.data["data"]), 3)
+
+    def test_list_newest_first(self):
+        """Verify invoices are ordered newest first."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        response = self.client.get(f"/api/v1/purchases/?outletId={self.outlet.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        invoices = response.data["data"]
+        # Should be ordered: PU-003 (3/15), PU-002 (3/15), PU-001 (3/10)
+        self.assertEqual(invoices[0]["invoiceNo"], "PU-002")
+        self.assertEqual(invoices[1]["invoiceNo"], "PU-003")
+        self.assertEqual(invoices[2]["invoiceNo"], "PU-001")
+
+    def test_list_filter_by_distributor(self):
+        """Verify filtering by distributorId."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        response = self.client.get(
+            f"/api/v1/purchases/?outletId={self.outlet.id}&distributorId={self.dist1.id}"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["data"]), 2)
+        for invoice in response.data["data"]:
+            self.assertEqual(invoice["distributorId"], str(self.dist1.id))
+
+    def test_list_filter_by_date_range(self):
+        """Verify filtering by startDate and endDate."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        response = self.client.get(
+            f"/api/v1/purchases/?outletId={self.outlet.id}&startDate=2026-03-12&endDate=2026-03-14"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Should only include PU-003 (3/12)
+        self.assertEqual(len(response.data["data"]), 1)
+        self.assertEqual(response.data["data"][0]["invoiceNo"], "PU-003")
+
+    def test_list_pagination(self):
+        """Verify pagination works correctly."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        response = self.client.get(
+            f"/api/v1/purchases/?outletId={self.outlet.id}&page=1&pageSize=2"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["data"]), 2)
+        self.assertEqual(response.data["pagination"]["page"], 1)
+        self.assertEqual(response.data["pagination"]["pageSize"], 2)
+        self.assertEqual(response.data["pagination"]["totalPages"], 2)
+        self.assertEqual(response.data["pagination"]["totalRecords"], 3)
+
+    def test_list_response_structure(self):
+        """Verify response includes all required fields."""
+        login_response = self.client.post(
+            "/api/v1/auth/login/",
+            {"phone": "9876543210", "password": "0000"},
+            format="json"
+        )
+        access_token = login_response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access_token}")
+
+        response = self.client.get(f"/api/v1/purchases/?outletId={self.outlet.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        invoice = response.data["data"][0]
+        required_fields = [
+            "id", "outletId", "distributorId", "distributor", "invoiceNo",
+            "invoiceDate", "dueDate", "subtotal", "discountAmount",
+            "taxableAmount", "gstAmount", "cessAmount", "freight", "roundOff",
+            "grandTotal", "amountPaid", "outstanding", "createdAt"
+        ]
+        for field in required_fields:
+            self.assertIn(field, invoice, f"Missing field: {field}")
