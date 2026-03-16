@@ -150,14 +150,15 @@ Copy `.env.example` to `.env`. Key vars:
 - ✅ Phase 2 Services - Sales: schedule_h_validate, generate_invoice_number — DONE
 - ✅ Phase 2 Services - Payments: bill_by_bill_payment_allocate — DONE
 - 🔄 Phase 3: API endpoints — IN PROGRESS
-- ✅ POST /api/v1/auth/login/ — DONE
-  - 🔄 GET /api/v1/products/search/ — NEXT
-  - ⏳ GET /api/v1/inventory/
-  - ⏳ POST+GET /api/v1/sales/
+  - ✅ POST /api/v1/auth/login/ — DONE
+  - ✅ GET /api/v1/products/search/ — DONE
+  - ✅ GET+POST /api/v1/customers/ — DONE
+  - ✅ GET+POST /api/v1/distributors/ — DONE
+  - ✅ GET /api/v1/distributors/{id}/ledger/ — DONE
+  - 🔄 GET /api/v1/inventory/ — NEXT
+  - ⏳ POST /api/v1/sales/ (most complex)
+  - ⏳ GET /api/v1/sales/
   - ⏳ POST+GET /api/v1/purchases/
-  - ⏳ GET+POST /api/v1/distributors/
-  - ⏳ GET+POST /api/v1/customers/
-  - ⏳ GET /api/v1/distributors/{id}/ledger/
   - ⏳ POST /api/v1/credit/payment/
   - ⏳ GET /api/v1/dashboard/daily/
   - ⏳ POST /api/v1/attendance/check-in/
