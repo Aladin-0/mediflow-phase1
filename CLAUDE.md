@@ -158,9 +158,9 @@ Copy `.env.example` to `.env`. Key vars:
   - ✅ GET /api/v1/inventory/ — DONE (55 tests passing)
   - ✅ POST /api/v1/sales/ — DONE (atomic, FEFO, Schedule H, multi-split)
   - ✅ GET /api/v1/sales/ — DONE
-  - ✅ POST+GET /api/v1/purchases/ — DONE (atomic batch injection, distributor ledger)
-  - 🔄 POST /api/v1/credit/payment/ — NEXT
-  - ⏳ GET /api/v1/dashboard/daily/
+  - ✅ POST /api/v1/purchases/payments/ — DONE (bill-by-bill allocation)
+  - ✅ POST /api/v1/credit/payment/ — DONE (customer udhari collection)
+  - 🔄 GET /api/v1/dashboard/daily/ + POST /api/v1/attendance/check-in/ — NEXT
   - ⏳ POST /api/v1/attendance/check-in/
 - Full plan: docs/plan.md
 

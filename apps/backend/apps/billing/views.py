@@ -1,12 +1,13 @@
 import logging
 from django.db import transaction
 from django.utils import timezone
+from django.db.models import Sum, Count, Q, F
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta, date
 
 from apps.billing.models import SaleInvoice, SaleItem, ScheduleHRegister, CreditTransaction, CreditAccount, LedgerEntry
 from apps.billing.services import (
@@ -666,3 +667,250 @@ class CustomerCreditPaymentView(APIView):
             'lastTransactionDate': credit_account.last_transaction_date.isoformat() if credit_account.last_transaction_date else None,
             'createdAt': credit_account.created_at.isoformat(),
         }
+
+
+class DashboardDailyView(APIView):
+    """
+    GET /api/v1/dashboard/daily/?outletId=xxx&date=2026-03-17
+
+    Get aggregated daily KPIs and alerts for an outlet.
+    Includes sales totals, payment breakdown, top selling items, hourly sales, and alerts.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        """
+        Get daily dashboard KPIs and alerts.
+
+        Query parameters:
+        - outletId: Outlet UUID (required)
+        - date: Date in yyyy-MM-dd format (default: today)
+
+        Returns:
+        {
+            "date": "2026-03-17",
+            "totalSales": 15000,
+            "totalBills": 25,
+            "cashCollected": 10000,
+            "upiCollected": 3000,
+            "cardCollected": 2000,
+            "creditGiven": 0,
+            "topSellingItems": [
+                {
+                    "productId": "...",
+                    "name": "Dolo 650",
+                    "totalQty": 150,
+                    "totalRevenue": 3000
+                }
+            ],
+            "hourlySales": [
+                {
+                    "hour": "09:00",
+                    "bills": 5,
+                    "sales": 2000
+                }
+            ],
+            "paymentBreakdown": {
+                "cash": 10000,
+                "upi": 3000,
+                "card": 2000,
+                "credit": 0
+            },
+            "alerts": {
+                "lowStock": [...],
+                "expiringSoon": [...],
+                "overdueAccounts": [...]
+            }
+        }
+        """
+
+        try:
+            outlet_id = request.query_params.get('outletId')
+            date_str = request.query_params.get('date', timezone.now().date().isoformat())
+
+            # Validate outlet
+            try:
+                outlet = Outlet.objects.get(id=outlet_id)
+            except Outlet.DoesNotExist:
+                logger.warning(f"Outlet {outlet_id} not found")
+                return Response(
+                    {'error': {'code': 'OUTLET_NOT_FOUND', 'message': 'Outlet not found'}},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Parse date
+            try:
+                target_date = datetime.fromisoformat(date_str).date()
+            except (ValueError, TypeError):
+                target_date = timezone.now().date()
+
+            logger.info(f"Fetching dashboard for {outlet.name} on {target_date}")
+
+            # Get sales for the date (using date() extraction from DateTimeField)
+            sales = SaleInvoice.objects.filter(
+                outlet=outlet,
+                invoice_date__date=target_date,
+                is_return=False
+            )
+
+            # Aggregate KPIs
+            aggregates = sales.aggregate(
+                total_sales=Sum('grand_total'),
+                total_bills=Count('id'),
+                cash_collected=Sum('cash_paid'),
+                upi_collected=Sum('upi_paid'),
+                card_collected=Sum('card_paid'),
+                credit_given=Sum('credit_given'),
+            )
+
+            total_sales = float(aggregates['total_sales'] or 0)
+            total_bills = aggregates['total_bills'] or 0
+            cash_collected = float(aggregates['cash_collected'] or 0)
+            upi_collected = float(aggregates['upi_collected'] or 0)
+            card_collected = float(aggregates['card_collected'] or 0)
+            credit_given = float(aggregates['credit_given'] or 0)
+
+            logger.info(f"Daily totals: Sales={total_sales}, Bills={total_bills}")
+
+            # Top selling items (by quantity)
+            top_items = SaleItem.objects.filter(
+                invoice__outlet=outlet,
+                invoice__invoice_date__date=target_date,
+                invoice__is_return=False
+            ).values('product_id', 'product_name').annotate(
+                total_qty=Sum('qty_strips'),
+                total_revenue=Sum('total_amount')
+            ).order_by('-total_qty')[:5]
+
+            top_selling = [
+                {
+                    'productId': str(item['product_id']) if item['product_id'] else 'custom',
+                    'name': item['product_name'],
+                    'totalQty': int(item['total_qty'] or 0),
+                    'totalRevenue': float(item['total_revenue'] or 0),
+                }
+                for item in top_items
+            ]
+
+            # Hourly sales aggregation (by hour)
+            from django.db.models.functions import ExtractHour
+            hourly = sales.annotate(
+                hour=ExtractHour('invoice_date')
+            ).values('hour').annotate(
+                bills=Count('id'),
+                sales=Sum('grand_total')
+            ).order_by('hour')
+
+            hourly_sales = [
+                {
+                    'hour': f"{item['hour']:02d}:00",
+                    'bills': item['bills'],
+                    'sales': float(item['sales'] or 0),
+                }
+                for item in hourly
+            ]
+
+            # Payment breakdown
+            payment_breakdown = {
+                'cash': cash_collected,
+                'upi': upi_collected,
+                'card': card_collected,
+                'credit': credit_given,
+            }
+
+            # Alerts
+            alerts = self._get_daily_alerts(outlet, target_date)
+
+            result = {
+                'date': target_date.isoformat(),
+                'totalSales': total_sales,
+                'totalBills': total_bills,
+                'cashCollected': cash_collected,
+                'upiCollected': upi_collected,
+                'cardCollected': card_collected,
+                'creditGiven': credit_given,
+                'topSellingItems': top_selling,
+                'hourlySales': hourly_sales,
+                'paymentBreakdown': payment_breakdown,
+                'alerts': alerts,
+            }
+
+            return Response(result, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error fetching dashboard: {e}", exc_info=True)
+            return Response(
+                {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch dashboard'}},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def _get_daily_alerts(self, outlet, target_date):
+        """Get alerts: low stock, expiring soon, overdue accounts."""
+        alerts = {
+            'lowStock': [],
+            'expiringSoon': [],
+            'overdueAccounts': [],
+        }
+
+        # Low stock: batches with qty_strips < 10
+        low_stock_batches = Batch.objects.filter(
+            outlet=outlet,
+            qty_strips__lt=10,
+            is_active=True,
+        ).select_related('product')
+
+        for batch in low_stock_batches:
+            alerts['lowStock'].append({
+                'batch': {
+                    'productName': batch.product.name,
+                    'batchNumber': batch.batch_no,
+                    'expiryDate': batch.expiry_date.isoformat(),
+                },
+                'currentStock': batch.qty_strips,
+                'reorderLevel': 10,
+            })
+
+        # Expiring soon: batches expiring within 90 days
+        expiry_cutoff = target_date + timedelta(days=90)
+        expiring_batches = Batch.objects.filter(
+            outlet=outlet,
+            expiry_date__lte=expiry_cutoff,
+            expiry_date__gt=target_date,
+            is_active=True,
+        ).select_related('product')
+
+        for batch in expiring_batches:
+            days_until = (batch.expiry_date - target_date).days
+            alerts['expiringSoon'].append({
+                'batch': {
+                    'productName': batch.product.name,
+                    'batchNumber': batch.batch_no,
+                    'expiryDate': batch.expiry_date.isoformat(),
+                },
+                'daysUntilExpiry': days_until,
+            })
+
+        # Overdue accounts: credit accounts with outstanding > 0 and due date passed
+        # This requires CreditAccount to have a due_date field or calculation from invoice dates
+        # For now, we'll check accounts with status 'overdue'
+        overdue_accounts = CreditAccount.objects.filter(
+            outlet=outlet,
+            status='overdue',
+            total_outstanding__gt=0,
+        ).select_related('customer')
+
+        for account in overdue_accounts:
+            # Calculate days overdue (estimate from last transaction)
+            days_overdue = 0
+            if account.last_transaction_date:
+                days_overdue = (timezone.now() - account.last_transaction_date).days
+
+            alerts['overdueAccounts'].append({
+                'customerId': str(account.customer_id),
+                'customerName': account.customer.name,
+                'outstandingAmount': float(account.total_outstanding),
+                'daysOverdue': days_overdue,
+            })
+
+        return alerts
