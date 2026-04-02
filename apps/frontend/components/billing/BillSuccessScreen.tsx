@@ -16,24 +16,17 @@ interface BillSuccessScreenProps {
 
 export function BillSuccessScreen({ invoice, onNewBill, onPrint, onViewInvoice }: BillSuccessScreenProps) {
     const { user } = useAuthStore();
-    const isOfflineMode = String(invoice.invoiceNo).startsWith('OFFLINE');
 
     return (
         <div data-testid="invoice-success" className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center px-4 animate-in fade-in zoom-in-95 duration-500">
-            
+
             <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mb-6 shadow-sm">
                 <CheckCircle2 className="w-10 h-10 text-green-600" />
             </div>
 
             <h2 className="text-2xl font-bold text-slate-900">
-                {isOfflineMode ? "Bill Saved Offline" : "Bill Saved Successfully!"}
+                Bill Saved Successfully!
             </h2>
-            
-            {isOfflineMode && (
-                <p className="text-amber-600 text-sm mt-2 bg-amber-50 px-3 py-1 rounded-full border border-amber-200 inline-block">
-                    Will sync when connected to the internet
-                </p>
-            )}
 
             <div className="bg-slate-100 rounded-xl px-6 py-4 mt-6 w-full border border-slate-200">
                 <p className="text-sm text-slate-500 uppercase tracking-wider font-semibold mb-1">Invoice Number</p>

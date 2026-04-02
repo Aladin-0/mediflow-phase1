@@ -23,8 +23,9 @@ export default function CustomerStatCards({ onFilterChronic, onFilterOutstanding
     const chronicCount = chronicData?.length ?? 0;
     const outstandingCount = outstandingData?.length ?? 0;
     const outstandingAmount = outstandingData?.reduce((s: number, c: any) => s + (c.outstanding || 0), 0) ?? 0;
-    const refillCount = refillAlerts?.length ?? 0;
-    const hasOverdue = refillAlerts?.some((a: any) => a.daysOverdue > 0) ?? false;
+    const refillList = Array.isArray(refillAlerts) ? refillAlerts : (refillAlerts as any)?.data ?? [];
+    const refillCount = refillList.length;
+    const hasOverdue = refillList.some((a: any) => a.daysOverdue > 0);
 
     const cards = [
         {

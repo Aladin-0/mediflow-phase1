@@ -1,11 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { differenceInDays } from 'date-fns';
-import { X, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, AlertTriangle, ChevronDown, ChevronUp, Plus, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { PurchaseItemFormData } from '@/types';
+import { PurchaseItemFormData, ProductSearchResult } from '@/types';
+import { productsApi } from '@/lib/apiClient';
 
 interface ItemFieldError { message?: string; }
 
@@ -14,6 +16,9 @@ interface Props {
     value: PurchaseItemFormData;
     onChange: (index: number, field: keyof PurchaseItemFormData, value: string | number) => void;
     onRemove: (index: number) => void;
+    onSelectProduct: (index: number, product: ProductSearchResult) => void;
+    onOpenAddProduct: (index: number, name: string) => void;
+    outletId: string;
     errors?: Partial<Record<keyof PurchaseItemFormData, ItemFieldError>>;
 }
 
@@ -86,8 +91,110 @@ export const PURCHASE_ITEM_COLS = [
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function PurchaseItemRow({ index, value, onChange, onRemove, errors }: Props) {
+export function PurchaseItemRow({
+    index, value, onChange, onRemove,
+    onSelectProduct, onOpenAddProduct, outletId, errors,
+}: Props) {
     const [expanded, setExpanded] = useState(false);
+
+    // Product search state
+    const [query, setQuery]               = useState('');
+    const [results, setResults]           = useState<ProductSearchResult[]>([]);
+    const [searching, setSearching]       = useState(false);
+    const [dropdownOpen, setDropdownOpen] = useState(false);
+    const [dropdownStyle, setDropdownStyle] = useState<{ top: number; left: number } | null>(null);
+    const debounceRef                     = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const wrapperRef                      = useRef<HTMLDivElement>(null);
+    const inputRef                        = useRef<HTMLInputElement>(null);
+    const portalRef                       = useRef<HTMLDivElement>(null);
+
+    // Helper to calculate dropdown position (viewport-relative for position:fixed)
+    const openDropdown = () => {
+        if (inputRef.current) {
+            const rect = inputRef.current.getBoundingClientRect();
+            setDropdownStyle({
+                top: rect.bottom + 2,
+                left: rect.left,
+            });
+        }
+        setDropdownOpen(true);
+    };
+
+    // Close dropdown on outside click — must check both wrapper and portal
+    useEffect(() => {
+        const handler = (e: MouseEvent) => {
+            const target = e.target as Node;
+            const inWrapper = wrapperRef.current?.contains(target);
+            const inPortal  = portalRef.current?.contains(target);
+            if (!inWrapper && !inPortal) {
+                setDropdownOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
+
+    // Sync dropdown position on scroll/resize when open
+    useEffect(() => {
+        if (!dropdownOpen) return;
+
+        const updatePosition = () => {
+            openDropdown();
+        };
+
+        // Use capture: true to catch scrolls on overflow ancestors
+        document.addEventListener('scroll', updatePosition, true);
+        window.addEventListener('resize', updatePosition);
+        return () => {
+            document.removeEventListener('scroll', updatePosition, true);
+            window.removeEventListener('resize', updatePosition);
+        };
+    }, [dropdownOpen]);
+
+    const handleQueryChange = (raw: string) => {
+        setQuery(raw);
+        onChange(index, 'productName', raw);
+        onChange(index, 'productId', '' as unknown as number);
+        onChange(index, 'isCustom', false as unknown as number);
+
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+
+        if (raw.length < 2) {
+            setResults([]);
+            if (raw.length > 0) openDropdown(); // show "no results + add" even for short queries
+            return;
+        }
+
+        setSearching(true);
+        openDropdown();
+        debounceRef.current = setTimeout(async () => {
+            if (!outletId) {
+                setResults([]);
+                setSearching(false);
+                return;
+            }
+            try {
+                const found = await productsApi.search(raw, outletId);
+                setResults(found);
+            } catch {
+                setResults([]);
+            } finally {
+                setSearching(false);
+            }
+        }, 300);
+    };
+
+    const handleSelectResult = (product: ProductSearchResult) => {
+        setQuery('');
+        setResults([]);
+        setDropdownOpen(false);
+        onSelectProduct(index, product);
+    };
+
+    const handleAddNew = () => {
+        setDropdownOpen(false);
+        onOpenAddProduct(index, query);
+    };
 
     const num = (field: keyof PurchaseItemFormData, raw: string) =>
         onChange(index, field, parseFloat(raw) || 0);
@@ -111,6 +218,62 @@ export function PurchaseItemRow({ index, value, onChange, onRemove, errors }: Pr
 
     return (
         <>
+            {/* Portal: Search dropdown (rendered at document.body to escape overflow clipping) */}
+            {dropdownOpen && !value.productId && dropdownStyle && createPortal(
+                <div
+                    ref={portalRef}
+                    className="z-[9999] w-80 min-w-[280px] rounded-xl border-2 border-slate-200 bg-white/95 backdrop-blur-sm shadow-2xl ring-1 ring-slate-200/50"
+                    style={{
+                        position: 'fixed',
+                        top: `${dropdownStyle.top}px`,
+                        left: `${dropdownStyle.left}px`,
+                    }}
+                >
+                    {searching && (
+                        <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-500">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Searching…
+                        </div>
+                    )}
+
+                    {!searching && results.length === 0 && query.length >= 2 && (
+                        <div className="px-3 py-2 text-xs text-slate-500">
+                            No results for &ldquo;{query}&rdquo;
+                        </div>
+                    )}
+
+                    {!searching && results.map((product) => (
+                        <button
+                            key={product.id}
+                            type="button"
+                            className="flex w-full flex-col px-3 py-2 text-left hover:bg-blue-50"
+                            onMouseDown={(e) => { e.preventDefault(); handleSelectResult(product); }}
+                        >
+                            <span className="text-xs font-medium text-slate-800">{product.name}</span>
+                            {product.composition && (
+                                <span className="text-[10px] text-slate-500 truncate">{product.composition}</span>
+                            )}
+                            <span className="text-[10px] text-slate-400">
+                                GST {product.gstRate}% · Stock {product.totalStock}
+                            </span>
+                        </button>
+                    ))}
+
+                    {/* Always show "Add new product" at bottom */}
+                    <button
+                        type="button"
+                        className="flex w-full items-center gap-1.5 border-t border-dashed border-slate-200 px-3 py-2 text-left hover:bg-blue-50"
+                        onMouseDown={(e) => { e.preventDefault(); handleAddNew(); }}
+                    >
+                        <Plus className="h-3 w-3 text-blue-600" />
+                        <span className="text-xs font-medium text-blue-600">
+                            {query ? `Add "${query}" as new product` : 'Add new product'}
+                        </span>
+                    </button>
+                </div>,
+                document.body,
+            )}
+
             <tr className={cn('group border-b border-slate-100 transition-colors hover:bg-blue-50/20', rowBg)}>
 
                 {/* # */}
@@ -119,33 +282,43 @@ export function PurchaseItemRow({ index, value, onChange, onRemove, errors }: Pr
                 </td>
 
                 {/* Product */}
-                <td className={td}>
-                    <div className="flex items-center gap-1">
-                        <input
-                            className={cn(cellInputCls(!!errors?.productName), 'flex-1 min-w-0')}
-                            value={value.productName}
-                            placeholder={value.isCustom ? 'Custom product name...' : 'Search product...'}
-                            onChange={(e) => {
-                                onChange(index, 'productName', e.target.value);
-                                if (!value.isCustom) {
-                                    onChange(index, 'isCustom', true as any);
-                                    onChange(index, 'productId', '');
-                                }
-                            }}
-                        />
-                        {value.isCustom && (
-                            <span
-                                title="Custom — click to reset"
-                                onClick={() => {
-                                    onChange(index, 'isCustom', false as any);
-                                    onChange(index, 'productName', '');
-                                    onChange(index, 'productId', '');
+                <td className={cn(td, 'overflow-visible')}>
+                    <div ref={wrapperRef} className="relative">
+                        {value.productId ? (
+                            /* Product already selected — show name + reset button */
+                            <div className="flex items-center gap-1">
+                                <span className="flex-1 truncate rounded-md border border-slate-200 bg-slate-50 px-1.5 py-1 text-xs text-slate-800">
+                                    {value.productName}
+                                </span>
+                                <span
+                                    title="Clear — search again"
+                                    onClick={() => {
+                                        onChange(index, 'productId', '' as unknown as number);
+                                        onChange(index, 'productName', '');
+                                        onChange(index, 'isCustom', false as unknown as number);
+                                        setQuery('');
+                                        setResults([]);
+                                    }}
+                                    className="cursor-pointer rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-red-100 hover:text-red-600 whitespace-nowrap"
+                                >
+                                    ×
+                                </span>
+                            </div>
+                        ) : (
+                            /* Search input */
+                            <input
+                                ref={inputRef}
+                                className={cn(cellInputCls(!!errors?.productName), 'w-full')}
+                                value={query || value.productName}
+                                placeholder="Search product..."
+                                onChange={(e) => handleQueryChange(e.target.value)}
+                                onFocus={() => {
+                                    if (query.length >= 2 || results.length > 0) openDropdown();
                                 }}
-                                className="cursor-pointer rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-700 hover:bg-amber-200 whitespace-nowrap"
-                            >
-                                custom ×
-                            </span>
+                                autoComplete="off"
+                            />
                         )}
+
                     </div>
                     {errors?.productName && (
                         <p className="mt-0.5 text-[10px] leading-none text-red-500">{errors.productName.message}</p>

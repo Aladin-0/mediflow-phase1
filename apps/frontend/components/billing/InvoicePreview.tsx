@@ -4,204 +4,249 @@ import React, { forwardRef } from 'react';
 import { format } from 'date-fns';
 import { SaleInvoice } from '@/types';
 import { useAuthStore } from '@/store/authStore';
+import { formatQty } from '@/lib/utils';
+import { SCHEDULE_MARKERS } from '@/constants/scheduleTypes';
 
 interface InvoicePreviewProps {
     invoice: SaleInvoice;
 }
 
+// ─── Amount in words (Indian format) ──────────────────────────────────────────
+
+const ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
+    'Seventeen', 'Eighteen', 'Nineteen'];
+const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+function toWords(n: number): string {
+    if (n === 0) return '';
+    if (n < 20) return ONES[n];
+    if (n < 100) return TENS[Math.floor(n / 10)] + (n % 10 ? ' ' + ONES[n % 10] : '');
+    if (n < 1000) return ONES[Math.floor(n / 100)] + ' Hundred' + (n % 100 ? ' ' + toWords(n % 100) : '');
+    if (n < 100000) return toWords(Math.floor(n / 1000)) + ' Thousand' + (n % 1000 ? ' ' + toWords(n % 1000) : '');
+    if (n < 10000000) return toWords(Math.floor(n / 100000)) + ' Lakh' + (n % 100000 ? ' ' + toWords(n % 100000) : '');
+    return toWords(Math.floor(n / 10000000)) + ' Crore' + (n % 10000000 ? ' ' + toWords(n % 10000000) : '');
+}
+
+function amountInWords(amount: number): string {
+    const intPart = Math.floor(amount);
+    const decPart = Math.round((amount - intPart) * 100);
+    let words = toWords(intPart) || 'Zero';
+    if (decPart > 0) words += ' and ' + toWords(decPart) + ' Paise';
+    return 'Rs. ' + words + ' Only';
+}
+
+function fmtAmt(n: number) {
+    return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtExpiry(dateStr: string) {
+    try { return format(new Date(dateStr), 'M/yy'); } catch { return dateStr; }
+}
+
+function abbrevMfg(manufacturer?: string) {
+    if (!manufacturer) return '—';
+    return manufacturer.substring(0, 5).toUpperCase();
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export const InvoicePreview = forwardRef<HTMLDivElement, InvoicePreviewProps>(({ invoice }, ref) => {
-    const { outlet, user } = useAuthStore();
-    
-    // In a real scenario, this would come from an API or customer relation
-    // For mock/MVP, checking direct payload references if they existed
-    const customerStr = invoice.customerId ? `Customer ID: ${invoice.customerId}` : 'Walk-in Customer';
+    const { outlet } = useAuthStore();
+
+    const customer = (invoice as any).customer;
+    const customerName = customer?.name || 'Cash Customer';
+    const customerPhone = customer?.phone || '—';
+    const customerAddress = customer?.address || '—';
+
+    const invoiceDate = invoice.invoiceDate || invoice.createdAt;
+    const subtotalMRP = invoice.subtotal;
+    const discountAmt = invoice.discountAmount;
+    const grandTotal = invoice.grandTotal;
+
+    // Padding to minimum 8 rows
+    const items = invoice.items || [];
+    const padRows = Math.max(0, 8 - items.length);
 
     return (
-        <div ref={ref} className="bg-white text-slate-900 w-[210mm] max-w-full mx-auto p-8 font-sans text-sm print:shadow-none print:m-0 print:w-[210mm] shadow relative">
-            
-            {/* --- HEADER --- */}
-            <div className="flex justify-between items-start">
-                <div className="flex flex-col">
-                    {outlet?.logoUrl ? (
-                         /* eslint-disable-next-line @next/next/no-img-element */
-                        <img src={outlet.logoUrl} alt="Logo" className="w-16 h-16 object-contain mb-2" />
-                    ) : (
-                        <div className="w-12 h-12 bg-slate-200 rounded mb-2 flex items-center justify-center text-xs font-bold text-slate-500">LOGO</div>
-                    )}
-                    <h1 className="text-xl font-bold uppercase tracking-wider">{outlet?.name || 'MediFlow Pharmacy'}</h1>
-                    <p className="text-xs text-slate-600 mt-1 max-w-[250px]">
-                        {outlet?.address || '123 Health Street, Medical District'}<br />
-                        {outlet?.city || 'City'}, {outlet?.state || 'State'} {outlet?.pincode || '000000'}
-                    </p>
-                    <div className="text-xs mt-2 text-slate-600 border-l-2 border-slate-300 pl-2">
-                        <p><span className="font-semibold text-slate-500">Ph:</span> {outlet?.phone || '+91 0000000000'}</p>
-                        <p><span className="font-semibold text-slate-500">GSTIN:</span> {outlet?.gstin || '27XXXXX0000X1ZX'}</p>
-                        <p><span className="font-semibold text-slate-500">D.L No:</span> {outlet?.drugLicenseNo || 'MH-MZ4-111111'}</p>
+        <div
+            ref={ref}
+            className="bg-white text-slate-900 font-sans text-[11px] leading-tight w-[148mm] mx-auto p-4 print:p-3 print:shadow-none"
+            style={{ fontFamily: 'Arial, sans-serif' }}
+        >
+            {/* ── SECTION 1: OUTLET HEADER ── */}
+            <div className="text-center mb-2">
+                {outlet?.logoUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={outlet.logoUrl} alt="Logo" className="h-12 object-contain mx-auto mb-1" />
+                )}
+                <h1 className="text-base font-bold uppercase tracking-wide leading-tight">
+                    {outlet?.name || 'PHARMACY'}
+                </h1>
+                <p className="text-[10px] text-slate-600 mt-0.5">
+                    {outlet?.address || ''}{outlet?.city ? `, ${outlet.city}` : ''}
+                    {outlet?.phone ? `   Phone: ${outlet.phone}` : ''}
+                </p>
+                {outlet?.gstin && (
+                    <p className="text-[10px] text-slate-500">GSTIN: {outlet.gstin}</p>
+                )}
+            </div>
+
+            <div className="border-t border-b border-slate-800 py-0.5 mb-2" />
+
+            {/* ── SECTION 2: PATIENT + BILL INFO ── */}
+            <div className="border border-slate-400 mb-2">
+                <div className="grid grid-cols-2 gap-0">
+                    {/* Left column */}
+                    <div className="border-r border-slate-300 px-2 py-1 space-y-0.5">
+                        <p><span className="font-semibold">Patient Name :</span> {customerName}</p>
+                        <p><span className="font-semibold">Registration No :</span></p>
+                        <p><span className="font-semibold">Address :</span> {customerAddress}</p>
+                    </div>
+                    {/* Right column */}
+                    <div className="px-2 py-1 space-y-0.5">
+                        <p><span className="font-semibold">Bill No :</span> {invoice.invoiceNo}</p>
+                        <p>
+                            <span className="font-semibold">Bill Date :</span>{' '}
+                            {format(new Date(invoiceDate), 'dd-MM-yyyy')}
+                            <span className="font-semibold ml-2">TIME:</span>{' '}
+                            {format(new Date(invoiceDate), 'HH:mm')}
+                        </p>
+                        <p><span className="font-semibold">Mobile :</span> {customerPhone}</p>
                     </div>
                 </div>
-
-                <div className="text-right flex flex-col items-end">
-                    <h2 className="text-2xl font-bold text-primary tracking-widest border border-primary px-3 py-1 bg-primary/5 uppercase mb-4">Tax Invoice</h2>
-                    
-                    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm text-left w-64 bg-slate-50 p-3 rounded">
-                        <span className="font-semibold text-slate-500">Invoice No:</span>
-                        <span className="font-mono font-bold text-slate-900 text-right">{invoice.invoiceNo}</span>
-                        
-                        <span className="font-semibold text-slate-500">Date:</span>
-                        <span className="text-right">{format(new Date(invoice.createdAt), 'dd/MM/yyyy')}</span>
-                        
-                        <span className="font-semibold text-slate-500">Time:</span>
-                        <span className="text-right">{format(new Date(invoice.createdAt), 'hh:mm a')}</span>
-                    </div>
-
-                    <div className="mt-4 text-left w-64">
-                        <p className="font-bold text-slate-900 border-b border-slate-200 pb-1 mb-1">Billed To:</p>
-                        <p className="font-semibold">{customerStr}</p>
-                        {/* {invoice.doctor && <p className="text-xs mt-1 text-slate-600">Prescribed by: {invoice.doctor}</p>} */}
-                    </div>
+                {/* Doctor row */}
+                <div className="border-t border-slate-300 grid grid-cols-2 px-2 py-1">
+                    <p className="text-[10px]">
+                        <span className="font-semibold">Doctor Name :</span>{' '}
+                        {invoice.doctorName
+                            ? `${invoice.doctorName}${invoice.doctorRegNo ? `  REG.NO: ${invoice.doctorRegNo}` : ''}`
+                            : '—'}
+                    </p>
+                    <p className="text-[10px] text-right">
+                        <span className="font-semibold">ABHA No.:</span>
+                    </p>
+                </div>
+                {/* Salesman */}
+                <div className="border-t border-slate-300 px-2 py-0.5 text-right">
+                    <span className="font-semibold">Sales Man :</span>{' '}
+                    {invoice.billedByName || '—'}
                 </div>
             </div>
 
-            <div className="w-full h-0.5 bg-slate-900 mt-6 md:mt-8 mix-blend-multiply"></div>
-
-            {/* --- ITEMS TABLE --- */}
-            <table className="w-full mt-4 text-xs">
+            {/* ── SECTION 3: ITEMS TABLE ── */}
+            <table className="w-full border-collapse border border-slate-400 mb-2 text-[10px]">
                 <thead>
-                    <tr className="bg-slate-900 text-white font-medium uppercase tracking-wider text-left border-b-2 border-slate-900">
-                        <th className="py-2 px-2 w-8 text-center">#</th>
-                        <th className="py-2 px-2">Item Name</th>
-                        <th className="py-2 px-2 w-20">Batch</th>
-                        <th className="py-2 px-2 w-24">Expiry</th>
-                        <th className="py-2 px-2 w-16 text-right">Qty</th>
-                        <th className="py-2 px-2 w-20 text-right">Rate</th>
-                        <th className="py-2 px-2 w-16 text-right">Disc%</th>
-                        <th className="py-2 px-2 w-16 text-right">GST%</th>
-                        <th className="py-2 px-2 w-24 text-right">Amount</th>
+                    <tr className="bg-slate-100 border-b border-slate-400">
+                        <th className="border-r border-slate-300 px-1 py-1 text-center w-[4%]">SN.</th>
+                        <th className="border-r border-slate-300 px-1 py-1 text-left w-[30%] font-bold">PRODUCT NAME</th>
+                        <th className="border-r border-slate-300 px-1 py-1 text-center w-[8%]">MFG</th>
+                        <th className="border-r border-slate-300 px-1 py-1 text-center w-[12%]">Batch No.</th>
+                        <th className="border-r border-slate-300 px-1 py-1 text-center w-[8%]">Expiry</th>
+                        <th className="border-r border-slate-300 px-1 py-1 text-center w-[8%]">Qty</th>
+                        <th className="border-r border-slate-300 px-1 py-1 text-right w-[10%]">MRP</th>
+                        <th className="px-1 py-1 text-right w-[12%]">Amount</th>
+                    </tr>
+                    <tr className="border-b border-slate-300 bg-slate-50">
+                        <td colSpan={8} className="px-2 py-0.5 font-semibold text-[9px] text-slate-600">
+                            SUPPLIED ITEMS ======&gt;
+                        </td>
                     </tr>
                 </thead>
                 <tbody>
-                    {invoice.items.map((item, index) => (
-                         <tr key={index} className="border-b border-slate-100 last:border-slate-300">
-                            <td className="py-2 px-2 text-center text-slate-500">{index + 1}</td>
-                            <td className="py-2 px-2 font-medium">{item.productId || `Item ${index + 1}`}</td>
-                            <td className="py-2 px-2 text-slate-600 uppercase font-mono">{item.batchId?.slice(0, 6) || 'BATCH'}</td>
-                            <td className="py-2 px-2 text-slate-600 font-mono">12/26</td>
-                            <td className="py-2 px-2 text-right">
-                                {item.qtyStrips > 0 ? `${item.qtyStrips}S ` : ''}
-                                {item.qtyLoose > 0 ? `${item.qtyLoose}L` : ''}
-                            </td>
-                            <td className="py-2 px-2 text-right">₹{item.rate.toFixed(2)}</td>
-                            <td className="py-2 px-2 text-right text-slate-500">{item.discountPct}%</td>
-                            <td className="py-2 px-2 text-right text-slate-500">{item.gstRate}%</td>
-                            <td className="py-2 px-2 text-right font-medium">
-                                ₹{((item.qtyStrips + item.qtyLoose) * item.rate * (1 - item.discountPct / 100)).toFixed(2)}
-                            </td>
+                    {items.map((item, i) => {
+                        const scheduleMarker = SCHEDULE_MARKERS[item.scheduleType ?? ''] ?? '';
+                        const isScheduled = !!scheduleMarker;
+                        const qtyDisplay = item.qtyStrips > 0
+                            ? `${item.qtyStrips * item.packSize}`
+                            : `${item.qtyLoose}`;
+                        const lineTotal = item.totalAmount ?? (item.rate * item.totalQty * (1 - item.discountPct / 100));
+
+                        return (
+                            <tr key={item.batchId} className="border-b border-slate-200">
+                                <td className="border-r border-slate-200 px-1 py-0.5 text-center">{i + 1}</td>
+                                <td className="border-r border-slate-200 px-1 py-0.5 uppercase font-medium">
+                                    {isScheduled && <span className="text-slate-500 mr-0.5">{scheduleMarker}</span>}
+                                    {item.name}
+                                </td>
+                                <td className="border-r border-slate-200 px-1 py-0.5 text-center">{abbrevMfg(item.manufacturer)}</td>
+                                <td className="border-r border-slate-200 px-1 py-0.5 text-center font-mono">{item.batchNo}</td>
+                                <td className="border-r border-slate-200 px-1 py-0.5 text-center">{fmtExpiry(item.expiryDate)}</td>
+                                <td className="border-r border-slate-200 px-1 py-0.5 text-center">{qtyDisplay}</td>
+                                <td className="border-r border-slate-200 px-1 py-0.5 text-right">{fmtAmt(item.mrp)}</td>
+                                <td className="px-1 py-0.5 text-right">{fmtAmt(lineTotal)}</td>
+                            </tr>
+                        );
+                    })}
+                    {/* Padding rows */}
+                    {Array.from({ length: padRows }).map((_, i) => (
+                        <tr key={`pad-${i}`} className="border-b border-slate-100">
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="border-r border-slate-100 px-1 py-2" />
+                            <td className="px-1 py-2" />
                         </tr>
                     ))}
                 </tbody>
             </table>
 
-            {/* --- TOTALS AREA --- */}
-            <div className="flex justify-between mt-4 items-start">
-                
-                {/* GST Breakup Table (Left) */}
-                <div className="w-[300px]">
-                    <div className="border border-slate-300 rounded overflow-hidden mt-6">
-                        <table className="w-full text-[10px] text-slate-600 text-center">
-                            <thead className="bg-slate-100 border-b border-slate-300">
-                                <tr>
-                                    <th className="py-1 px-1 font-semibold border-r border-slate-300">GST %</th>
-                                    <th className="py-1 px-1 font-semibold border-r border-slate-300">Taxable</th>
-                                    <th className="py-1 px-1 font-semibold border-r border-slate-300">CGST</th>
-                                    <th className="py-1 px-1 font-semibold">SGST</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {/* Loop generic breakdown based on the static subtotal for now */}
-                                <tr className="border-b border-slate-200">
-                                    <td className="py-1 px-1 border-r border-slate-200">12%</td>
-                                    <td className="py-1 px-1 border-r border-slate-200">₹{invoice.taxableAmount.toFixed(2)}</td>
-                                    <td className="py-1 px-1 border-r border-slate-200">₹{invoice.cgst.toFixed(2)}</td>
-                                    <td className="py-1 px-1">₹{invoice.sgst.toFixed(2)}</td>
-                                </tr>
-                            </tbody>
-                            <tfoot className="bg-slate-50 font-bold border-t border-slate-300 text-slate-800">
-                                <tr>
-                                    <td className="py-1 px-1 border-r border-slate-300 text-right pr-2" colSpan={2}>Total Tax:</td>
-                                    <td className="py-1 px-1 border-r border-slate-300">₹{invoice.cgst.toFixed(2)}</td>
-                                    <td className="py-1 px-1">₹{invoice.sgst.toFixed(2)}</td>
-                                </tr>
-                            </tfoot>
-                        </table>
+            {/* ── SECTION 4 + 5: AMOUNT WORDS + TOTALS ── */}
+            <div className="border border-slate-400 mb-2">
+                <div className="grid grid-cols-2">
+                    {/* Left: Amount in words */}
+                    <div className="border-r border-slate-300 px-2 py-1.5">
+                        <p className="font-semibold text-[10px]">
+                            RUPEES : <span className="font-normal">{amountInWords(grandTotal)}</span>
+                        </p>
+                    </div>
+                    {/* Right: Totals */}
+                    <div className="px-2 py-1">
+                        <div className="flex justify-between">
+                            <span>GROSS :</span>
+                            <span className="font-medium">{fmtAmt(subtotalMRP)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>Dis :</span>
+                            <span className="font-medium">{fmtAmt(discountAmt)}</span>
+                        </div>
+                        <div className="flex justify-between border-t border-slate-400 mt-0.5 pt-0.5">
+                            <span className="font-bold">Amount :</span>
+                            <span className="font-bold text-[12px]">{fmtAmt(grandTotal)}</span>
+                        </div>
                     </div>
                 </div>
-
-                {/* Subtotals Area (Right) */}
-                <table className="w-72 text-sm text-right">
-                    <tbody>
-                        <tr className="text-slate-600">
-                            <td className="py-1 pr-6 uppercase tracking-wider text-xs">Subtotal</td>
-                            <td className="py-1">₹{invoice.subtotal.toFixed(2)}</td>
-                        </tr>
-                        {invoice.discountAmount > 0 && (
-                            <tr className="text-green-600">
-                                <td className="py-1 pr-6 uppercase tracking-wider text-xs">Total Discount</td>
-                                <td className="py-1">-₹{invoice.discountAmount.toFixed(2)}</td>
-                            </tr>
-                        )}
-                        <tr className="text-slate-600">
-                            <td className="py-1 pr-6 uppercase tracking-wider text-xs">Taxable Value</td>
-                            <td className="py-1">₹{invoice.taxableAmount.toFixed(2)}</td>
-                        </tr>
-                        <tr className="text-slate-600">
-                            <td className="py-1 pr-6 uppercase tracking-wider text-xs">CGST + SGST</td>
-                            <td className="py-1">+₹{(invoice.cgst + invoice.sgst).toFixed(2)}</td>
-                        </tr>
-                        {invoice.roundOff !== 0 && (
-                            <tr className="text-slate-600">
-                                <td className="py-1 pr-6 uppercase tracking-wider text-xs">Round Off</td>
-                                <td className="py-1">{invoice.roundOff > 0 ? '+' : ''}₹{invoice.roundOff.toFixed(2)}</td>
-                            </tr>
-                        )}
-                        <tr className="border-t-2 border-slate-900">
-                            <td className="py-3 pr-6 font-bold uppercase tracking-wider text-lg text-slate-900">Grand Total</td>
-                            <td className="py-3 font-bold text-xl text-slate-900">₹{invoice.grandTotal.toFixed(2)}</td>
-                        </tr>
-                    </tbody>
-                </table>
             </div>
 
-            {/* --- PAYMENT METHOD --- */}
-            <div className="flex border-t border-slate-300 mt-6 pt-4 text-xs font-semibold uppercase tracking-wider">
-                <div className="flex-1 text-slate-600">
-                    Payment Method: <span className="text-slate-900 font-bold ml-1">{invoice.paymentMode}</span>
-                </div>
-                <div className="text-right flex items-center gap-4">
-                    <span>Amount Paid: <br className="hidden" /><span className="text-slate-900 font-bold ml-1">₹{invoice.amountPaid.toFixed(2)}</span></span>
-                    {invoice.amountPaid > invoice.grandTotal && (
-                        <span>Change Returned: <br className="hidden" /><span className="text-green-700 font-bold ml-1">₹{(invoice.amountPaid - invoice.grandTotal).toFixed(2)}</span></span>
-                    )}
+            {/* ── SECTION 6: FOOTER ── */}
+            <div className="border border-slate-400 mb-1">
+                <div className="grid grid-cols-2">
+                    {/* Left: D.L.No + GST */}
+                    <div className="border-r border-slate-300 px-2 py-1.5 text-[10px]">
+                        <p><span className="font-semibold">D.L.No.:-</span> {outlet?.drugLicenseNo || '—'}</p>
+                        <p className="mt-0.5">
+                            <span className="font-semibold">TIME :</span>{' '}
+                            {format(new Date(invoiceDate), 'HH:mm')}
+                        </p>
+                    </div>
+                    {/* Right: Pharmacist signature */}
+                    <div className="px-2 py-1.5 text-right">
+                        <div className="h-8" />
+                        <p className="font-semibold text-[10px]">PHARMACIST SIGNATURE</p>
+                    </div>
                 </div>
             </div>
 
-            {/* --- FOOTER --- */}
-            <div className="mt-12 pt-4 border-t border-slate-200 text-xs text-slate-500 flex justify-between items-end">
-                <div>
-                    <p>Billed by: <span className="font-semibold text-slate-700">{user?.name || 'Staff Member'}</span></p>
-                    <p className="mt-1 text-[10px]">This is a computer-generated invoice and requires no signature.</p>
-                </div>
-                
-                <div className="text-center font-medium italic text-slate-400 pb-2">
-                    {outlet?.invoiceFooter || 'Thank you for your purchase! Get well soon.'}
-                </div>
-
-                <div className="w-20 h-20 border border-slate-200 flex flex-col items-center justify-center p-1 bg-slate-50">
-                    <span className="text-[8px] font-bold text-slate-400 text-center">SCAN TO<br/>VERIFY</span>
-                    {/* Placeholder for QR Code */}
-                    <div className="w-10 h-10 border-2 border-slate-300 border-dashed mt-1"></div>
-                </div>
+            {/* GST No + footer message */}
+            <div className="flex items-center justify-between text-[9px] text-slate-500 mt-1">
+                {outlet?.gstin && <p><span className="font-semibold">GST No.:-</span> {outlet.gstin}</p>}
+                <p className="text-center flex-1 italic">
+                    {outlet?.invoiceFooter || 'Wish You Speedy Recovery'}
+                </p>
             </div>
-            
         </div>
     );
 });

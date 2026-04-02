@@ -79,7 +79,6 @@ const realAuthApi = {
                 name: u.name,
                 phone: u.phone,
                 role: u.role,
-                staffPin: u.staffPin,
                 maxDiscount: u.maxDiscount,
                 canEditRate: u.canEditRate,
                 canViewPurchaseRates: u.canViewPurchaseRates,
@@ -123,7 +122,6 @@ const realAuthApi = {
             name: data.name,
             phone: data.phone,
             role: data.role,
-            staffPin: data.staffPin,
             maxDiscount: data.maxDiscount,
             canEditRate: data.canEditRate,
             canViewPurchaseRates: data.canViewPurchaseRates,
@@ -190,13 +188,46 @@ const realProductsApi = {
             isFridge: item.isFridge,
             isDiscontinued: item.isDiscontinued,
             imageUrl: item.imageUrl,
-            mrp: item.mrp,
+            mrp: item.mrp ?? 0,
+            saleRate: item.saleRate ?? 0,
             outletProductId: item.outletProductId,
             totalStock: item.totalStock,
             nearestExpiry: item.nearestExpiry,
             isLowStock: item.isLowStock,
             batches: item.batches || [],
         }));
+    },
+    create: async (payload: import('@/types').CreateProductPayload): Promise<ProductSearchResult> => {
+        const response = await fetch(`${API_URL}/products/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        const item = await response.json();
+        return {
+            id: item.id,
+            name: item.name,
+            composition: item.composition ?? '',
+            manufacturer: item.manufacturer ?? '',
+            category: item.category ?? '',
+            drugType: item.drugType ?? 'allopathy',
+            scheduleType: item.scheduleType ?? 'OTC',
+            hsnCode: item.hsnCode,
+            gstRate: item.gstRate,
+            packSize: item.packSize,
+            packUnit: item.packUnit,
+            packType: item.packType ?? 'strip',
+            isFridge: item.isFridge ?? false,
+            isDiscontinued: item.isDiscontinued ?? false,
+            mrp: item.mrp ?? 0,
+            saleRate: item.saleRate ?? 0,
+            outletProductId: item.outletProductId ?? item.id,
+            totalStock: 0,
+            nearestExpiry: '2099-12-31',
+            isLowStock: false,
+            batches: [],
+        };
     },
     getStock: async (productId: string, outletId: string) => {
         const response = await fetch(
@@ -300,8 +331,9 @@ const realSalesApi = {
         await assertOk(response);
         return response.json();
     },
-    getById: async (id: string): Promise<SaleInvoice> => {
-        const response = await fetch(`${API_URL}/sales/${id}/`, { headers: getHeaders() });
+    getById: async (id: string, outletId?: string): Promise<SaleInvoice> => {
+        const url = outletId ? `${API_URL}/sales/${id}/?outletId=${outletId}` : `${API_URL}/sales/${id}/`;
+        const response = await fetch(url, { headers: getHeaders() });
         await assertOk(response);
         return response.json();
     },
@@ -318,6 +350,17 @@ const realSalesApi = {
             headers: getHeaders(),
             body: JSON.stringify(payload),
         });
+        await assertOk(response);
+        return response.json();
+    },
+    listByCustomer: async (outletId: string, customerId: string): Promise<any> => {
+        const url = `${API_URL}/sales/?outletId=${outletId}&customerId=${customerId}&pageSize=200&ordering=-invoice_date`;
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        return response.json();
+    },
+    getItems: async (invoiceId: string): Promise<any> => {
+        const response = await fetch(`${API_URL}/sales/${invoiceId}/items/`, { headers: getHeaders() });
         await assertOk(response);
         return response.json();
     },
@@ -576,7 +619,7 @@ const realPurchasesApi = {
             headers: getHeaders(),
             body: JSON.stringify({
                 outletId: payload.outletId,
-                distributorId: payload.distributorId,
+                partyLedgerId: payload.partyLedgerId,
                 invoiceNo: payload.invoiceNo,
                 invoiceDate: payload.invoiceDate,
                 dueDate: payload.dueDate,
@@ -722,11 +765,15 @@ const realCustomersApi = {
             method: 'POST',
             headers: getHeaders(),
             body: JSON.stringify({
-                outlet_id: payload.outletId,
+                outletId: payload.outletId,
                 name: payload.name,
                 phone: payload.phone,
-                address: payload.address,
-                dob: payload.dob,
+                address: payload.address || null,
+                dob: payload.dob || null,
+                gstin: payload.gstin || null,
+                isChronic: payload.isChronic ?? false,
+                fixedDiscount: payload.fixedDiscount ?? 0,
+                creditLimit: payload.creditLimit ?? 0,
             }),
         });
         await assertOk(response);
@@ -736,7 +783,17 @@ const realCustomersApi = {
         const response = await fetch(`${API_URL}/customers/${id}/`, {
             method: 'PUT',
             headers: getHeaders(),
-            body: JSON.stringify(payload),
+            body: JSON.stringify({
+                outletId: payload.outletId,
+                name: payload.name,
+                phone: payload.phone,
+                address: payload.address || null,
+                dob: payload.dob || null,
+                gstin: payload.gstin || null,
+                isChronic: payload.isChronic ?? false,
+                fixedDiscount: payload.fixedDiscount ?? 0,
+                creditLimit: payload.creditLimit ?? 0,
+            }),
         });
         await assertOk(response);
         return response.json();
@@ -1078,6 +1135,19 @@ const realAccountsApi = {
         await assertOk(response);
         return response.json();
     },
+    getTrialBalance: async (outletId: string) => {
+        const url = `${API_URL}/trial-balance/?outlet_id=${outletId}`;
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        return response.json();
+    },
+    getGSTSummary: async (outletId: string, month?: string) => {
+        let url = `${API_URL}/gst-summary/?outlet_id=${outletId}`;
+        if (month) url += `&month=${month}`;
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        return response.json();
+    },
 };
 
 const realChainApi = {
@@ -1104,6 +1174,205 @@ const realChainApi = {
     },
 };
 
+const realVoucherApi = {
+    getLedgerGroups: async (outletId: string) => {
+        const response = await fetch(`${API_URL}/ledger-groups/?outletId=${outletId}`, { headers: getHeaders() });
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    getLedgers: async (outletId: string, params?: { type?: string; voucherType?: string; search?: string; group?: string }) => {
+        let url = `${API_URL}/ledgers/?outletId=${outletId}`;
+        if (params?.type) url += `&type=${params.type}`;
+        if (params?.voucherType) url += `&voucherType=${params.voucherType}`;
+        if (params?.search) url += `&search=${encodeURIComponent(params.search)}`;
+        if (params?.group) url += `&group=${encodeURIComponent(params.group)}`;
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    getLedgerStatement: async (ledgerId: string, from?: string, to?: string) => {
+        let url = `${API_URL}/ledgers/${ledgerId}/statement/`;
+        const params: string[] = [];
+        if (from) params.push(`from=${from}`);
+        if (to) params.push(`to=${to}`);
+        if (params.length) url += '?' + params.join('&');
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        return response.json();
+    },
+    syncLedgers: async (outletId: string) => {
+        const response = await fetch(`${API_URL}/ledgers/sync/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify({ outletId }),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    getNextVoucherNo: async (outletId: string, type: string) => {
+        const response = await fetch(`${API_URL}/ledgers/next-no/?outletId=${outletId}&type=${type}`, { headers: getHeaders() });
+        await assertOk(response);
+        return response.json();
+    },
+    getVouchers: async (outletId: string, type?: string) => {
+        let url = `${API_URL}/vouchers/?outletId=${outletId}`;
+        if (type) url += `&type=${type}`;
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    createVoucher: async (payload: any) => {
+        const response = await fetch(`${API_URL}/vouchers/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    getDebitNotes: async (outletId: string) => {
+        const response = await fetch(`${API_URL}/debit-notes/?outletId=${outletId}`, { headers: getHeaders() });
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    createDebitNote: async (payload: any) => {
+        const response = await fetch(`${API_URL}/debit-notes/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    getCreditNotes: async (outletId: string) => {
+        const response = await fetch(`${API_URL}/credit-notes/?outletId=${outletId}`, { headers: getHeaders() });
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    createCreditNote: async (payload: any) => {
+        const response = await fetch(`${API_URL}/credit-notes/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    createLedger: async (payload: any) => {
+        const response = await fetch(`${API_URL}/ledgers/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    updateLedger: async (ledgerId: string, payload: any) => {
+        const response = await fetch(`${API_URL}/ledgers/${ledgerId}/`, {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    createLedgerGroup: async (payload: { outletId: string; name: string; nature: string; parentId?: string }) => {
+        const response = await fetch(`${API_URL}/ledger-groups/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+    searchPurchaseInvoices: async (outletId: string, q: string) => {
+        const response = await fetch(
+            `${API_URL}/purchases/invoices/search/?outletId=${encodeURIComponent(outletId)}&q=${encodeURIComponent(q)}`,
+            { headers: getHeaders() }
+        );
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    searchSaleInvoices: async (outletId: string, q: string) => {
+        const response = await fetch(
+            `${API_URL}/sales/invoices/search/?outletId=${encodeURIComponent(outletId)}&q=${encodeURIComponent(q)}`,
+            { headers: getHeaders() }
+        );
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    getLedgerOutstanding: async (ledgerId: string) => {
+        const response = await fetch(`${API_URL}/ledgers/${ledgerId}/outstanding/`, { headers: getHeaders() });
+        await assertOk(response);
+        return response.json();
+    },
+    getPendingBills: async (outletId: string, ledgerId: string) => {
+        const response = await fetch(
+            `${API_URL}/ledgers/${ledgerId}/pending-bills/?outletId=${outletId}`,
+            { headers: getHeaders() }
+        );
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || [];
+    },
+    createSalesReturn: async (payload: any) => {
+        const response = await fetch(`${API_URL}/sales/return/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        return response.json();
+    },
+};
+
+const realDoctorsApi = {
+    search: async (outletId: string, search?: string): Promise<any[]> => {
+        let url = `${API_URL}/doctors/?outletId=${outletId}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        const response = await fetch(url, { headers: getHeaders() });
+        await assertOk(response);
+        const data = await response.json();
+        return (data.data || []).map((d: any) => ({
+            id: d.id,
+            name: d.name,
+            regNo: d.registrationNo ?? '',
+            qualification: d.qualification ?? '',
+            specialty: d.specialization ?? '',
+            phone: d.phone ?? '',
+            outletId,
+            isActive: true,
+        }));
+    },
+    create: async (payload: { name: string; registrationNo: string; outletId: string; qualification?: string; phone?: string }): Promise<any> => {
+        const response = await fetch(`${API_URL}/doctors/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(payload),
+        });
+        await assertOk(response);
+        const data = await response.json();
+        const d = data.data;
+        return {
+            id: d.id,
+            name: d.name,
+            regNo: d.registrationNo ?? '',
+            qualification: d.qualification ?? '',
+            specialty: d.specialization ?? '',
+            phone: d.phone ?? '',
+            outletId: payload.outletId,
+            isActive: true,
+        };
+    },
+};
+
 export const authApi = realAuthApi;
 export const productsApi = realProductsApi;
 export const salesApi = realSalesApi;
@@ -1119,3 +1388,5 @@ export const reportsApi = realReportsApi;
 export const accountsApi = realAccountsApi;
 export const settingsApi = realSettingsApi;
 export const chainApi = realChainApi;
+export const voucherApi = realVoucherApi;
+export const doctorsApi = realDoctorsApi;

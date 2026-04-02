@@ -4,11 +4,13 @@ from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.core.permissions import IsManagerOrAbove
 from rest_framework import status
 from django.db.models import Q
 
 from apps.purchases.models import Distributor, PurchaseInvoice
 from apps.billing.models import LedgerEntry, PaymentEntry, PaymentAllocation
+from apps.accounts.models import Ledger, JournalLine
 from apps.core.models import Outlet
 from apps.purchases.services import atomic_purchase_save, PurchaseServiceError, bill_by_bill_payment_allocate, OverpaymentError
 
@@ -23,7 +25,7 @@ class DistributorListView(APIView):
     Returns list of distributor profiles with credit terms.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, *args, **kwargs):
         """
@@ -73,13 +75,26 @@ class DistributorListView(APIView):
 
         logger.info(f"Found {distributors.count()} active distributors")
 
+        # Pre-fetch linked ledger balances in one query
+        ledger_map = {
+            ledger.linked_distributor_id: ledger
+            for ledger in Ledger.objects.filter(
+                outlet=outlet,
+                linked_distributor__in=distributors,
+            )
+        }
+
         # Serialize distributors
         results = []
         for distributor in distributors:
+            linked_ledger = ledger_map.get(distributor.id)
+            current_balance = float(linked_ledger.current_balance) if linked_ledger else float(distributor.opening_balance or 0)
             result = {
                 'id': str(distributor.id),
                 'name': distributor.name,
                 'gstin': distributor.gstin,
+                'drugLicenseNo': distributor.drug_license_no,
+                'foodLicenseNo': distributor.food_license_no,
                 'phone': distributor.phone,
                 'email': distributor.email,
                 'address': distributor.address,
@@ -87,6 +102,7 @@ class DistributorListView(APIView):
                 'state': distributor.state,
                 'creditDays': distributor.credit_days,
                 'openingBalance': float(distributor.opening_balance) if distributor.opening_balance else 0,
+                'currentBalance': current_balance,
                 'balanceType': distributor.balance_type,
                 'isActive': distributor.is_active,
                 'createdAt': distributor.created_at.isoformat(),
@@ -112,6 +128,7 @@ class DistributorListView(APIView):
             name=request.data.get('name'),
             gstin=request.data.get('gstin'),
             drug_license_no=request.data.get('drugLicenseNo'),
+            food_license_no=request.data.get('foodLicenseNo'),
             phone=request.data.get('phone', ''),
             email=request.data.get('email'),
             address=request.data.get('address', ''),
@@ -130,6 +147,7 @@ class DistributorListView(APIView):
             'name': distributor.name,
             'gstin': distributor.gstin,
             'drugLicenseNo': distributor.drug_license_no,
+            'foodLicenseNo': distributor.food_license_no,
             'phone': distributor.phone,
             'email': distributor.email,
             'address': distributor.address,
@@ -141,7 +159,7 @@ class DistributorListView(APIView):
             'isActive': distributor.is_active,
             'createdAt': distributor.created_at.isoformat(),
         }
-        
+
         return Response(result, status=status.HTTP_201_CREATED)
 
 class DistributorDetailView(APIView):
@@ -151,7 +169,7 @@ class DistributorDetailView(APIView):
     Get distributor details by ID.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, distributor_id, *args, **kwargs):
         """Get distributor details."""
@@ -178,6 +196,7 @@ class DistributorDetailView(APIView):
             'name': distributor.name,
             'gstin': distributor.gstin,
             'drugLicenseNo': distributor.drug_license_no,
+            'foodLicenseNo': distributor.food_license_no,
             'phone': distributor.phone,
             'email': distributor.email,
             'address': distributor.address,
@@ -214,13 +233,14 @@ class DistributorDetailView(APIView):
 
         # Update allowed fields
         allowed_fields = [
-            'name', 'gstin', 'drug_license_no', 'phone', 'email',
+            'name', 'gstin', 'drug_license_no', 'food_license_no', 'phone', 'email',
             'address', 'city', 'state', 'credit_days', 'opening_balance', 'balance_type', 'is_active'
         ]
-        
+
         for field in allowed_fields:
             camel_field = {
                 'drug_license_no': 'drugLicenseNo',
+                'food_license_no': 'foodLicenseNo',
                 'credit_days': 'creditDays',
                 'opening_balance': 'openingBalance',
                 'balance_type': 'balanceType',
@@ -241,6 +261,7 @@ class DistributorDetailView(APIView):
             'name': distributor.name,
             'gstin': distributor.gstin,
             'drugLicenseNo': distributor.drug_license_no,
+            'foodLicenseNo': distributor.food_license_no,
             'phone': distributor.phone,
             'email': distributor.email,
             'address': distributor.address,
@@ -264,7 +285,7 @@ class DistributorLedgerView(APIView):
     Returns list of all debit/credit entries for the distributor.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, distributor_id, *args, **kwargs):
         """
@@ -317,38 +338,52 @@ class DistributorLedgerView(APIView):
 
         logger.info(f"Fetching ledger for distributor: {distributor.name}")
 
-        # Get ledger entries for this distributor
-        ledger_entries = LedgerEntry.objects.filter(
+        # Find the accounts.Ledger linked to this distributor (created by partyLedgerId flow)
+        linked_ledger = Ledger.objects.filter(
             outlet=outlet,
-            distributor=distributor,
-            entity_type='distributor'
-        ).order_by('date', 'created_at')
+            linked_distributor=distributor
+        ).first()
 
-        logger.info(f"Found {ledger_entries.count()} ledger entries")
+        entries = []
+        opening_balance = 0.0
+        closing_balance = 0.0
 
-        # Serialize ledger entries
-        ledger_list = []
-        total_debit = 0
-        total_credit = 0
-        running_balance = 0
+        if linked_ledger:
+            opening_balance = float(linked_ledger.opening_balance)
+            closing_balance = float(linked_ledger.current_balance)
 
-        for entry in ledger_entries:
-            ledger_list.append({
-                'id': str(entry.id),
-                'date': entry.date.isoformat(),
-                'entryType': entry.entry_type,
-                'referenceNo': entry.reference_no,
-                'description': entry.description,
-                'debit': float(entry.debit),
-                'credit': float(entry.credit),
-                'runningBalance': float(entry.running_balance),
-                'createdAt': entry.created_at.isoformat(),
-            })
-            total_debit += entry.debit
-            total_credit += entry.credit
-            running_balance = entry.running_balance
+            SOURCE_TYPE_MAP = {
+                'PURCHASE': 'purchase',
+                'VOUCHER': 'payment',
+                'SALE': 'sale',
+                'RETURN': 'debit_note',
+                'CREDIT_PAYMENT': 'payment',
+            }
 
-        # Distributor summary
+            lines = (
+                JournalLine.objects
+                .filter(ledger=linked_ledger)
+                .select_related('journal_entry')
+                .order_by('journal_entry__date', 'journal_entry__created_at')
+            )
+
+            running = opening_balance
+            for line in lines:
+                je = line.journal_entry
+                debit = float(line.debit_amount)
+                credit = float(line.credit_amount)
+                running = running + credit - debit  # creditor: credit ↑ balance, debit ↓ balance
+                entries.append({
+                    'id': str(line.id),
+                    'date': str(je.date),
+                    'entryType': SOURCE_TYPE_MAP.get(je.source_type, 'purchase'),
+                    'referenceNo': '',
+                    'description': je.narration,
+                    'debit': debit,
+                    'credit': credit,
+                    'balance': round(running, 2),
+                })
+
         distributor_data = {
             'id': str(distributor.id),
             'name': distributor.name,
@@ -366,12 +401,9 @@ class DistributorLedgerView(APIView):
 
         result = {
             'distributor': distributor_data,
-            'ledger': ledger_list,
-            'summary': {
-                'totalDebit': float(total_debit),
-                'totalCredit': float(total_credit),
-                'runningBalance': float(running_balance),
-            }
+            'entries': entries,
+            'openingBalance': opening_balance,
+            'closingBalance': closing_balance,
         }
 
         return Response(result, status=status.HTTP_200_OK)
@@ -388,7 +420,7 @@ class PurchaseCreateView(APIView):
     Response: PurchaseInvoiceFull (201 Created) or error (400/404/500)
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def post(self, request, *args, **kwargs):
         """
@@ -602,7 +634,7 @@ class PurchaseListView(APIView):
     Response: PaginatedResponse<PurchaseInvoice>
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, *args, **kwargs):
         """
@@ -665,7 +697,7 @@ class PurchaseListView(APIView):
             logger.info(f"Fetching purchases for outlet {outlet.name}")
 
             # Start with all invoices for this outlet
-            queryset = PurchaseInvoice.objects.filter(outlet=outlet)
+            queryset = PurchaseInvoice.objects.filter(outlet=outlet).select_related('distributor')
 
             # Filter by distributor if provided
             distributor_id = request.query_params.get('distributorId')
@@ -780,7 +812,7 @@ class DistributorPaymentView(APIView):
     Response: PaymentEntry (201 Created) or error (400/404/500)
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def post(self, request, *args, **kwargs):
         """
@@ -927,7 +959,7 @@ class PurchaseDetailView(APIView):
     Get details of a specific purchase invoice, including its items.
     """
     
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, purchase_id, *args, **kwargs):
         outlet_id = request.query_params.get('outletId')
@@ -1027,7 +1059,7 @@ class PaymentListView(APIView):
     GET /api/v1/purchases/payments/?distributorId=&from=&to=
     Lists PaymentEntry records for an outlet with optional filters.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, *args, **kwargs):
         outlet_id = request.query_params.get('outletId')
@@ -1077,7 +1109,7 @@ class DistributorOutstandingView(APIView):
     GET /api/v1/purchases/distributors/{pk}/outstanding/
     Returns all unpaid PurchaseInvoices for a distributor.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, pk, *args, **kwargs):
         outlet_id = request.query_params.get('outletId')
@@ -1112,3 +1144,50 @@ class DistributorOutstandingView(APIView):
             })
 
         return Response({'success': True, 'data': data, 'meta': {'total': len(data)}}, status=status.HTTP_200_OK)
+
+
+class PurchaseInvoiceSearchView(APIView):
+    """GET /api/v1/purchases/invoices/search/?outletId=xxx&q=INV-001"""
+    permission_classes = [IsManagerOrAbove]
+
+    def get(self, request):
+        outlet_id = request.query_params.get('outletId')
+        q = request.query_params.get('q', '').strip()
+        if not outlet_id:
+            return Response({'detail': 'outletId required'}, status=400)
+        try:
+            outlet = Outlet.objects.get(id=outlet_id)
+        except Outlet.DoesNotExist:
+            return Response({'detail': 'Outlet not found'}, status=404)
+
+        qs = PurchaseInvoice.objects.filter(outlet=outlet).select_related('distributor').prefetch_related('items')
+        if q:
+            qs = qs.filter(
+                Q(invoice_no__icontains=q) | Q(distributor__name__icontains=q)
+            )
+        qs = qs.order_by('-invoice_date')[:20]
+
+        results = []
+        for inv in qs:
+            items = []
+            for item in inv.items.all():
+                product_name = item.master_product.name if item.master_product else (item.custom_product_name or 'Unknown')
+                items.append({
+                    'productName': product_name,
+                    'batchId': str(item.batch_id),
+                    'batchNo': item.batch_no,
+                    'expiry': str(item.expiry_date),
+                    'qty': item.qty,
+                    'rate': float(item.purchase_rate),
+                    'gstRate': float(item.gst_rate),
+                })
+            results.append({
+                'id': str(inv.id),
+                'invoiceNo': inv.invoice_no,
+                'date': str(inv.invoice_date),
+                'distributorName': inv.distributor.name,
+                'distributorId': str(inv.distributor.id),
+                'grandTotal': float(inv.grand_total),
+                'items': items,
+            })
+        return Response({'data': results})

@@ -35,6 +35,8 @@ class SaleInvoice(models.Model):
     # Bill amounts
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, help_text='Before discount and tax')
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    extra_discount_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0,
+                                             help_text='Cart-level extra discount percentage')
     taxable_amount = models.DecimalField(max_digits=12, decimal_places=2)
 
     # GST (CGST + SGST for intrastate, IGST for interstate)
@@ -60,7 +62,6 @@ class SaleInvoice(models.Model):
 
     # Sale type
     is_return = models.BooleanField(default=False, help_text='Sales return/credit note')
-    has_return = models.BooleanField(default=False, help_text='True if a SalesReturn exists for this invoice')
 
     # Audit
     billed_by = models.ForeignKey('accounts.Staff', on_delete=models.SET_NULL, null=True)
@@ -80,6 +81,12 @@ class SaleInvoice(models.Model):
 
     def __str__(self):
         return f"{self.invoice_no} - ₹{self.grand_total}"
+
+    @property
+    def has_return(self):
+        """True when every item on this invoice has been fully returned."""
+        items = list(self.items.all())
+        return bool(items) and all(item.qty_returned >= item.qty_strips for item in items)
 
     def clean(self):
         """Validate invoice amounts and payment splits."""
@@ -126,6 +133,7 @@ class SaleItem(models.Model):
     # Quantity (supports negative for returns)
     qty_strips = models.IntegerField(help_text='Strips/packs (can be negative for returns)')
     qty_loose = models.IntegerField(default=0, help_text='Loose units (can be negative for returns)')
+    qty_returned = models.PositiveIntegerField(default=0, help_text='Total strips returned so far across all return transactions')
     sale_mode = models.CharField(max_length=20, choices=SALE_MODE_CHOICES, default='strip')
 
     # Discount and tax

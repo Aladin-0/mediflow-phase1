@@ -1,6 +1,6 @@
 'use client';
 
-import { Heart, RefreshCw, ArrowRight, Receipt, UserSearch } from 'lucide-react';
+import { Heart, RefreshCw, ArrowRight, Receipt, UserSearch, Pencil } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -38,9 +38,10 @@ function getInitials(name: string) {
 
 interface CustomerGridProps {
     filters: CustomerFilters;
+    onEdit?: (customer: CustomerFull) => void;
 }
 
-export default function CustomerGrid({ filters }: CustomerGridProps) {
+export default function CustomerGrid({ filters, onEdit }: CustomerGridProps) {
     const { data, isLoading } = useCustomerList(filters);
     const setCustomer = useBillingStore((s) => s.setCustomer);
     const router = useRouter();
@@ -149,6 +150,12 @@ export default function CustomerGrid({ filters }: CustomerGridProps) {
                                 onClick={() => router.push(`/dashboard/customers/${customer.id}`)}>
                                 <ArrowRight className="w-3 h-3 mr-1" /> View
                             </Button>
+                            {onEdit && (
+                                <Button variant="ghost" size="sm" className="text-xs h-8 px-2"
+                                    onClick={() => onEdit(customer)}>
+                                    <Pencil className="w-3 h-3" />
+                                </Button>
+                            )}
                             <Button variant="outline" size="sm" className="flex-1 text-xs h-8"
                                 onClick={() => { setCustomer(customer); router.push('/dashboard/billing'); }}>
                                 <Receipt className="w-3 h-3 mr-1" /> Quick Bill

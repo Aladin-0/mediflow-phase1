@@ -17,6 +17,7 @@ import { PaymentModal } from '@/components/billing/PaymentModal'
 import { BillSuccessScreen } from '@/components/billing/BillSuccessScreen'
 import { InvoicePreviewModal } from '@/components/billing/InvoicePreviewModal'
 import { useSaveBill } from '@/hooks/useSaveBill'
+import { useToast } from '@/hooks/use-toast'
 
 export default function BillingPage() {
     const {
@@ -25,6 +26,7 @@ export default function BillingPage() {
         cart,
         getTotals,
         customer,
+        customerLedger,
         scheduleHData,
         setScheduleHData,
         removeFromCart,
@@ -43,6 +45,7 @@ export default function BillingPage() {
 
     const searchBarRef = useRef<HTMLInputElement>(null)
     const { saveBill, isLoading } = useSaveBill()
+    const { toast } = useToast()
 
     const handleProductSelect = (product: ProductSearchResult) => {
         setSelectedProduct(product)
@@ -90,7 +93,14 @@ export default function BillingPage() {
     }
 
     const handlePaymentConfirm = async (payment: PaymentSplit) => {
-        saveBill(payment)
+        try {
+            await saveBill(payment)
+            setShowPayment(false);
+        } catch (err: any) {
+            const msg = err?.detail ?? err?.error?.message ?? err?.message ?? 'Failed to save bill. Please try again.'
+            toast({ variant: 'destructive', title: 'Bill save failed', description: msg })
+            setShowPayment(true)
+        }
     }
 
     const handleStartNewBill = () => {
@@ -235,7 +245,7 @@ export default function BillingPage() {
                 onConfirm={handlePaymentConfirm}
                 totals={totals}
                 isLoading={isLoading}
-                customer={customer}
+                customerLedger={customerLedger}
             />
 
             <InvoicePreviewModal

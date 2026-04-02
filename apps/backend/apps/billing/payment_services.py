@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any, Dict
 
 from django.db import transaction
+from django.db.models import Sum
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
@@ -246,8 +247,9 @@ def create_sales_return(payload: Dict[str, Any], outlet_id: str, created_by_id: 
     3. Generate return_no with SELECT FOR UPDATE
     4. Create SalesReturn + SalesReturnItems
     5. Reverse stock: batch.qty_strips += qty_returned
-    6. Mark original SaleInvoice.has_return = True
-    7. If refundMode='credit_note' → update customer.outstanding -= totalAmount
+    6. Increment SaleItem.qty_returned for each returned line (C10)
+    7. Reverse the double-entry journal atomically (C1)
+    8. If refundMode='credit_note' → update customer.outstanding -= totalAmount
        + create LedgerEntry
     """
     try:
@@ -280,7 +282,7 @@ def create_sales_return(payload: Dict[str, Any], outlet_id: str, created_by_id: 
     for item_data in items_payload:
         sale_item_id = item_data.get('saleItemId')
         batch_id = item_data.get('batchId')
-        qty_returned = int(item_data.get('qtyReturned', 0))
+        qty_returned = int(item_data.get('qtyReturned', item_data.get('qty', 0)))
         return_rate = Decimal(str(item_data.get('returnRate', 0)))
 
         try:
@@ -288,10 +290,17 @@ def create_sales_return(payload: Dict[str, Any], outlet_id: str, created_by_id: 
         except SaleItem.DoesNotExist:
             raise ReturnServiceError(f"SaleItem {sale_item_id} not found on invoice {original_sale_id}")
 
-        if qty_returned > sale_item.qty_strips:
+        # C8: guard against over-returning across multiple return transactions
+        already_returned = sale_item.qty_returned  # tracked by C10's field
+        
+        # Calculate total units (tablets/capsules) originally sold
+        pack_size = sale_item.pack_size or 1
+        original_total_units = (sale_item.qty_strips * pack_size) + sale_item.qty_loose
+        
+        if qty_returned + already_returned > original_total_units:
             raise ReturnServiceError(
-                f"qty_returned ({qty_returned}) exceeds original qty ({sale_item.qty_strips}) "
-                f"for item {sale_item.product_name}"
+                f"Cannot return {qty_returned} unit(s) of '{sale_item.product_name}'. "
+                f"Original qty: {original_total_units}, already returned: {already_returned}."
             )
 
         try:
@@ -327,7 +336,10 @@ def create_sales_return(payload: Dict[str, Any], outlet_id: str, created_by_id: 
         created_by=created_by,
     )
 
-    # Create items + reverse stock
+    # C1: all mutations are inside the @transaction.atomic decorator —
+    # any failure (including journal reversal) rolls back everything atomically.
+
+    # Create items, reverse stock, and update per-item qty_returned (C10)
     return_items = []
     for item_data in items_to_create:
         return_items.append(SalesReturnItem(
@@ -340,16 +352,29 @@ def create_sales_return(payload: Dict[str, Any], outlet_id: str, created_by_id: 
             return_rate=item_data['return_rate'],
             total_amount=item_data['total_amount'],
         ))
-        # Reverse stock
+        # Reverse stock (The Strip Builder Logic!)
         batch = item_data['batch']
-        batch.qty_strips += item_data['qty_returned']
-        batch.save(update_fields=['qty_strips'])
+        
+        # 1. We must get the pack size (how many tablets fit in a strip)
+        # We use select_related or fetch it safely
+        pack_size = batch.product.pack_size or 1
+        
+        # 2. Add the returned tablets directly to the loose tray first
+        batch.qty_loose += item_data['qty_returned']
+        
+        # 3. MAGIC: If the loose tray has enough to make a full box, seal it up!
+        while batch.qty_loose >= pack_size:
+            batch.qty_strips += 1
+            batch.qty_loose -= pack_size
+            
+        # Save BOTH fields to the database
+        batch.save(update_fields=['qty_strips', 'qty_loose'])
+        # C10: track how much of this line item has been returned
+        sale_item = item_data['sale_item']
+        sale_item.qty_returned += item_data['qty_returned']
+        sale_item.save(update_fields=['qty_returned'])
 
     SalesReturnItem.objects.bulk_create(return_items)
-
-    # Mark original sale as having a return
-    original_sale.has_return = True
-    original_sale.save(update_fields=['has_return'])
 
     # Handle credit note
     if refund_mode == 'credit_note' and original_sale.customer:
@@ -370,6 +395,12 @@ def create_sales_return(payload: Dict[str, Any], outlet_id: str, created_by_id: 
             credit=total_amount,
             running_balance=prev_balance - total_amount,
         )
+
+    # C1: Reverse the double-entry journal for the original sale.
+    # This runs inside the @transaction.atomic decorator, so any exception
+    # here rolls back the SalesReturn, stock changes, and qty_returned updates.
+    from apps.accounts.journal_service import reverse_journal
+    reverse_journal('SALE', original_sale.id, str(outlet.id))
 
     logger.info(f"SalesReturn {return_no} created: ₹{total_amount}")
     return sales_return

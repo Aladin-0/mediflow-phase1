@@ -7,9 +7,20 @@ export type StaffRole =
     | 'billing_staff'
     | 'view_only';
 
-export type DrugSchedule = 'OTC' | 'H' | 'H1' | 'X' | 'Narcotic';
+export type DrugSchedule =
+  | 'OTC'
+  | 'G'
+  | 'H'
+  | 'H1'
+  | 'X'
+  | 'C'
+  | 'Narcotic'
+  | 'Ayurvedic'
+  | 'Surgical'
+  | 'Cosmetic'
+  | 'Veterinary';
 export type DrugType = 'allopathy' | 'ayurveda' | 'homeo' | 'fmcg';
-export type PaymentMode = 'cash' | 'upi' | 'card' | 'credit' | 'split' | 'cheque' | 'bank_transfer';
+export type PaymentMode = 'cash' | 'upi' | 'card' | 'credit' | 'split' | 'ledger' | 'cheque' | 'bank_transfer';
 export type SaleMode = 'strip' | 'loose' | 'bottle';
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'half_day' | 'holiday' | 'weekly_off';
 export type PurchaseType = 'cash' | 'credit';
@@ -86,7 +97,7 @@ export interface AuthUser {
     name: string;
     phone: string;
     role: StaffRole;
-    staffPin: string;
+    staffPin?: string;
     outletId: string;
     organizationId?: string;
     isSuperAdmin?: boolean;
@@ -118,7 +129,7 @@ export interface StaffMember {
     name: string;
     phone: string;
     role: StaffRole;
-    staffPin: string;
+    staffPin?: string;
     avatarUrl?: string;
     maxDiscount: number;
     canEditRate: boolean;
@@ -134,7 +145,7 @@ export interface StaffPinVerifyResponse {
     id: string;
     name: string;
     role: StaffRole;
-    staffPin: string;
+    staffPin?: string;
     maxDiscount: number;
     canEditRate: boolean;
     billsToday: number;
@@ -168,6 +179,22 @@ export interface MasterProduct {
     isFridge: boolean;
     isDiscontinued: boolean;
     imageUrl?: string;
+    mrp: number;
+    saleRate: number;
+    currentStock?: number;
+}
+
+export interface CreateProductPayload {
+    name: string;
+    composition?: string;
+    manufacturer?: string;
+    hsnCode: string;
+    gstRate: number;
+    packSize: number;
+    packUnit: string;
+    scheduleType: string;
+    mrp: number;
+    saleRate: number;
 }
 
 export interface Batch {
@@ -210,6 +237,7 @@ export interface Customer {
     outstanding: number;
     totalPurchases: number;
     isChronic: boolean;
+    isActive?: boolean;
     createdAt: string;
 }
 
@@ -275,6 +303,7 @@ export interface CartItem {
     productId: string;
     name: string;
     composition?: string;
+    manufacturer?: string;
     packSize: number;
     packUnit: string;
     requiresPrescription?: boolean;
@@ -293,6 +322,7 @@ export interface CartItem {
     taxableAmount: number;
     gstAmount: number;
     totalAmount: number;
+    purchaseRate?: number;
 }
 
 export interface PaymentSplit {
@@ -310,11 +340,14 @@ export interface PaymentSplit {
         card: number;
         credit: number;
     };
+    ledgerNote?: string;
+    ledgerCustomerId?: string | null;
 }
 
 export interface BillTotals {
     subtotal: number;
     discountAmount: number;
+    extraDiscountAmount: number;
     taxableAmount: number;
     cgstAmount: number;
     sgstAmount: number;
@@ -371,6 +404,37 @@ export interface SaleInvoice {
     billedByName: string;
     items: CartItem[];
     createdAt: string;
+    doctorName?: string;
+    doctorRegNo?: string;
+}
+
+export interface SaleInvoiceSummary {
+    id: string;
+    invoiceNo: string;
+    invoiceDate: string;
+    grandTotal: number;
+    amountPaid: number;
+    amountDue: number;
+    paymentMode: 'cash' | 'upi' | 'card' | 'credit' | 'split';
+    isReturn: boolean;
+    itemsCount: number;
+    billedByName?: string;
+}
+
+export interface SaleItemDetail {
+    id: string;
+    productName: string;
+    qtyStrips: number;
+    qtyLoose: number;
+    totalQty: number;
+    rate: number;
+    discountPct: number;
+    totalAmount: number;
+    packSize?: number;
+    packUnit?: string;
+    batchNo?: string;
+    expiryDate?: string;
+    gstRate?: number;
 }
 
 // ─── Credit ───────────────────────────────────────────────────────────────────
@@ -428,6 +492,7 @@ export interface Distributor {
     name: string;
     gstin?: string;
     drugLicenseNo?: string;
+    foodLicenseNo?: string;
     phone: string;
     email?: string;
     address: string;
@@ -435,6 +500,7 @@ export interface Distributor {
     state: string;
     creditDays: number;
     openingBalance?: number;
+    currentBalance?: number;
     balanceType?: 'CR' | 'DR';
     isActive: boolean;
 }
@@ -581,7 +647,7 @@ export interface CreatePurchaseItemPayload {
 
 export interface CreatePurchasePayload {
     outletId: string;
-    distributorId: string;
+    partyLedgerId: string;
     purchaseType: PurchaseType;
     invoiceNo: string;
     invoiceDate: string;
@@ -1191,3 +1257,174 @@ export const INDIAN_STATES = [
     { code: '36', name: 'Telangana' },
     { code: '37', name: 'Andhra Pradesh' },
 ] as const;
+
+// ─── Ledger / Voucher / Notes ─────────────────────────────────────────────────
+
+export interface LedgerGroup {
+    id: string;
+    name: string;
+    nature: 'asset' | 'liability' | 'income' | 'expense';
+    parentId: string | null;
+    isSystem: boolean;
+}
+
+export interface Ledger {
+    id: string;
+    name: string;
+    groupId: string;
+    groupName: string;
+    nature: 'asset' | 'liability' | 'income' | 'expense';
+    openingBalance: number;
+    balanceType: 'Dr' | 'Cr';
+    currentBalance: number;
+    phone?: string;
+    gstin?: string;
+    address?: string;
+    linkedCustomerId?: string;
+    linkedDistributorId?: string;
+    isSystem: boolean;
+    createdAt: string;
+    // Contact
+    station?: string;
+    mailTo?: string;
+    contactPerson?: string;
+    designation?: string;
+    phoneOffice?: string;
+    phoneResidence?: string;
+    faxNo?: string;
+    website?: string;
+    email?: string;
+    pincode?: string;
+    // Compliance
+    freezeUpto?: string | null;
+    dlNo?: string;
+    dlExpiry?: string | null;
+    vatNo?: string;
+    vatExpiry?: string | null;
+    stNo?: string;
+    stExpiry?: string | null;
+    foodLicenceNo?: string;
+    foodLicenceExpiry?: string | null;
+    extraHeadingNo?: string;
+    extraHeadingExpiry?: string | null;
+    panNo?: string;
+    itPanNo?: string;
+    // GST / Tax
+    gstHeading?: 'local' | 'central' | 'exempt';
+    billExport?: 'gstn' | 'non_gstn';
+    ledgerType?: 'registered' | 'unregistered' | 'composition' | 'consumer';
+    // Settings
+    balancingMethod?: 'bill_by_bill' | 'on_account';
+    ledgerCategory?: string;
+    state?: string;
+    country?: string;
+    color?: 'normal' | 'red' | 'green' | 'blue';
+    isHidden?: boolean;
+    retailioId?: string;
+}
+
+export interface PendingBill {
+    id: string;
+    invoiceNo: string;
+    date: string;
+    grandTotal: number;
+    outstanding: number;
+    invoiceType: 'sale' | 'purchase';
+}
+
+export interface BillAdjustment {
+    invoiceId: string;
+    invoiceType: 'sale' | 'purchase';
+    adjustedAmount: number;
+}
+
+export interface VoucherLine {
+    id?: string;
+    ledgerId: string;
+    ledgerName?: string;
+    debit: number;
+    credit: number;
+    description?: string;
+}
+
+export interface Voucher {
+    id: string;
+    voucherType: 'receipt' | 'payment' | 'contra' | 'journal';
+    voucherNo: string;
+    date: string;
+    narration?: string;
+    totalAmount: number;
+    paymentMode: 'cash' | 'bank' | 'upi';
+    lines: VoucherLine[];
+    createdBy: string;
+    createdAt: string;
+}
+
+export interface DebitNoteItem {
+    id?: string;
+    batchId: string;
+    productName: string;
+    qty: number;
+    rate: number;
+    gstRate: number;
+    total: number;
+}
+
+export interface DebitNote {
+    id: string;
+    debitNoteNo: string;
+    date: string;
+    distributorId: string;
+    distributorName: string;
+    purchaseInvoiceId?: string;
+    reason: string;
+    subtotal: number;
+    gstAmount: number;
+    totalAmount: number;
+    status: 'pending' | 'adjusted' | 'refunded';
+    items: DebitNoteItem[];
+    createdAt: string;
+}
+
+export interface CreditNoteItem {
+    id?: string;
+    batchId: string;
+    productName: string;
+    qty: number;
+    rate: number;
+    gstRate: number;
+    total: number;
+}
+
+export interface CreditNote {
+    id: string;
+    creditNoteNo: string;
+    date: string;
+    customerId?: string;
+    customerName?: string;
+    saleInvoiceId?: string;
+    reason: string;
+    subtotal: number;
+    gstAmount: number;
+    totalAmount: number;
+    status: 'pending' | 'adjusted' | 'refunded';
+    items: CreditNoteItem[];
+    createdAt: string;
+}
+
+export interface LedgerStatement {
+    ledger: Ledger;
+    openingBalance: number;
+    closingBalance: number;
+    transactions: LedgerTransaction[];
+}
+
+export interface LedgerTransaction {
+    date: string;
+    voucherNo: string;
+    voucherType: string;
+    description: string;
+    debit: number;
+    credit: number;
+    balance: number;
+}

@@ -2,13 +2,14 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from apps.core.permissions import IsAdminStaff
 
 from apps.core.models import Outlet, OutletSettings
 
 
 class OutletSettingsView(APIView):
     """GET/PATCH /api/v1/outlet/settings/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminStaff]
 
     def _serialize(self, settings):
         def fmt_time(t, default):

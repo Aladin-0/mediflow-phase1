@@ -10,12 +10,14 @@ import AlertsRow from '@/components/dashboard/AlertsRow';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import dynamic from 'next/dynamic';
 
-const HourlySalesChart = dynamic(() => import('@/components/dashboard/HourlySalesChart'), { 
+const HOURLY_HEIGHTS = ['45%', '65%', '55%', '70%', '50%', '60%', '52%', '68%', '48%', '72%'];
+
+const HourlySalesChart = dynamic(() => import('@/components/dashboard/HourlySalesChart'), {
   ssr: false,
   loading: () => (
     <div className="flex gap-2 items-end h-60 w-full pt-4 animate-pulse">
       {[...Array(10)].map((_, i) => (
-        <div key={i} className="flex-1 bg-slate-100 rounded-t-sm" style={{ height: `${Math.max(20, Math.random() * 100)}%` }} />
+        <div key={i} className="flex-1 bg-slate-100 rounded-t-sm" style={{ height: HOURLY_HEIGHTS[i % HOURLY_HEIGHTS.length] }} />
       ))}
     </div>
   )

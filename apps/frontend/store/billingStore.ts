@@ -4,6 +4,7 @@ import {
     StaffPinVerifyResponse,
     Customer,
     Doctor,
+    Ledger,
     PaymentSplit,
     ScheduleHData,
     BillTotals,
@@ -15,6 +16,7 @@ interface BillingState {
     activeStaff: StaffPinVerifyResponse | null;
     isPinVerified: boolean;
     customer: Customer | null;
+    customerLedger: Ledger | null;
     doctor: Doctor | null;
     payment: PaymentSplit;
     scheduleHData: ScheduleHData | null;
@@ -23,15 +25,19 @@ interface BillingState {
     searchQuery: string;
     lastInvoice: SaleInvoice | null;
 
+    extraDiscountPct: number;
+
     // Actions
     setActiveStaff: (staff: StaffPinVerifyResponse) => void;
     clearPin: () => void;
     setCustomer: (c: Customer | null) => void;
+    setCustomerLedger: (l: Ledger | null) => void;
     setDoctor: (d: Doctor | null) => void;
     addToCart: (item: CartItem) => void;
     removeFromCart: (batchId: string) => void;
     updateCartItem: (batchId: string, updates: Partial<CartItem>) => void;
     applyDiscountToItem: (batchId: string, pct: number) => void;
+    setExtraDiscountPct: (pct: number) => void;
     clearCart: () => void;
     setPayment: (payment: Partial<PaymentSplit>) => void;
     setScheduleHData: (data: ScheduleHData | null) => void;
@@ -62,6 +68,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     activeStaff: null,
     isPinVerified: false,
     customer: null,
+    customerLedger: null,
     doctor: null,
     payment: initialPayment,
     scheduleHData: null,
@@ -70,10 +77,12 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     searchQuery: '',
     lastInvoice: null,
     billsToday: 0,
+    extraDiscountPct: 0,
 
     setActiveStaff: (staff) => set({ activeStaff: staff, isPinVerified: true }),
     clearPin: () => set({ activeStaff: null, isPinVerified: false }),
     setCustomer: (customer) => set({ customer }),
+    setCustomerLedger: (customerLedger) => set({ customerLedger }),
     setDoctor: (doctor) => set({ doctor }),
 
     addToCart: (item) => set((state) => {
@@ -115,13 +124,17 @@ export const useBillingStore = create<BillingState>((set, get) => ({
         })
     })),
 
+    setExtraDiscountPct: (pct) => set({ extraDiscountPct: Math.max(0, Math.min(100, pct)) }),
+
     clearCart: () => set({
-        cart: [],
+        cart: [],   
         customer: null,
+        customerLedger: null,
         doctor: null,
         payment: initialPayment,
         scheduleHData: null,
-        prescriptionImageUrl: null
+        prescriptionImageUrl: null,
+        extraDiscountPct: 0,
     }),
 
     setPayment: (updates) => set((state) => ({
@@ -136,16 +149,23 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     resetBilling: () => set({
         cart: [],
         customer: null,
+        customerLedger: null,
         doctor: null,
         payment: initialPayment,
         scheduleHData: null,
         isPinVerified: false,
-        activeStaff: null
+        activeStaff: null,
+        extraDiscountPct: 0,
+        lastInvoice: null,
         // intentionally keeping lastInvoice per requirements
     }),
 
     getTotals: () => {
         const state = get();
+        const extraDiscPct = state.extraDiscountPct || 0;
+        // C2 fix: discount factor applied per-item BEFORE GST extraction
+        const discountFactor = extraDiscPct > 0 ? 1 - extraDiscPct / 100 : 1;
+
         let subtotal = 0;
         let totalRateAmount = 0;
         let taxableAmount = 0;
@@ -158,26 +178,39 @@ export const useBillingStore = create<BillingState>((set, get) => ({
         state.cart.forEach(item => {
             const rawTotal = item.rate * item.totalQty;
             const gstRate = item.gstRate || 0;
-            const itemTaxable = gstRate > 0 ? rawTotal / (1 + gstRate / 100) : rawTotal;
-            const itemGst = rawTotal - itemTaxable;
 
-            subtotal += (item.mrp * item.totalQty);
+            subtotal += item.mrp * item.totalQty;
             totalRateAmount += rawTotal;
-            taxableAmount += itemTaxable;
-            cgstAmount += itemGst / 2;
-            sgstAmount += itemGst / 2;
             totalQty += item.totalQty;
 
-            if (item.scheduleType === 'H' || item.scheduleType === 'H1' || item.scheduleType === 'X' || item.scheduleType === 'Narcotic') {
+            // Apply extra discount to this item BEFORE extracting GST
+            const discountedTotal = rawTotal * discountFactor;
+
+            // Backward GST extraction from GST-inclusive discounted amount
+            // Quantize itemTaxable to 2 decimals BEFORE computing itemGst
+            // so the floor-based CGST/SGST split matches the backend exactly.
+            const itemTaxable = gstRate > 0
+                ? Number((discountedTotal / (1 + gstRate / 100)).toFixed(2))
+                : Number(discountedTotal.toFixed(2));
+            const itemGst = Number((discountedTotal - itemTaxable).toFixed(2));
+
+            taxableAmount += itemTaxable;
+
+            // H8 fix: floor-based split guarantees CGST + SGST = itemGst exactly
+            const itemCgst = Math.floor(itemGst * 100 / 2) / 100;
+            const itemSgst = Number((itemGst - itemCgst).toFixed(2));
+            cgstAmount += itemCgst;
+            sgstAmount += itemSgst;
+
+            if (['G', 'H', 'H1', 'X', 'C', 'Narcotic'].includes(item.scheduleType)) {
                 hasScheduleH = true;
-            }
-            if (item.scheduleType === 'H1' || item.scheduleType === 'X' || item.scheduleType === 'Narcotic') {
                 requiresDoctorDetails = true;
             }
         });
 
         const discountAmount = subtotal - totalRateAmount;
-        // ensure grand total uses exact GST matching to taxable
+        const extraDiscountAmount = totalRateAmount * extraDiscPct / 100;
+
         const exactTotal = taxableAmount + cgstAmount + sgstAmount;
         const grandTotal = Math.round(exactTotal);
         const roundOff = grandTotal - exactTotal;
@@ -188,6 +221,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
         return {
             subtotal,
             discountAmount,
+            extraDiscountAmount,
             taxableAmount,
             cgstAmount,
             sgstAmount,
@@ -208,7 +242,7 @@ export const useBillingStore = create<BillingState>((set, get) => ({
     hasScheduleHItems: () => {
         const state = get();
         return state.cart.some(
-            item => item.scheduleType === 'H1' || item.scheduleType === 'X' || item.scheduleType === 'Narcotic'
+            item => ['H1', 'X', 'C', 'Narcotic'].includes(item.scheduleType)
         );
     },
 

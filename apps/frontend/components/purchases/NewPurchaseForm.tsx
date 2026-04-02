@@ -10,15 +10,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+// Note: Select still used for Purchase Type / Godown dropdowns
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
-import { useCreatePurchase, useDistributors } from '@/hooks/usePurchases';
+import { useCreatePurchase } from '@/hooks/usePurchases';
+import { LedgerPicker } from '@/components/accounts/LedgerPicker';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { PurchaseItemRow } from './PurchaseItemRow';
-import { PurchaseItemFormData } from '@/types';
+import { AddNewProductDrawer } from './AddNewProductDrawer';
+import { PurchaseItemFormData, ProductSearchResult, Ledger } from '@/types';
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -44,7 +47,7 @@ const itemSchema = z.object({
 });
 
 const schema = z.object({
-    distributorId:    z.string().min(1, 'Select a distributor'),
+    partyLedgerId:    z.string().min(1, 'Select a party ledger'),
     purchaseType:     z.enum(['credit', 'cash']),
     invoiceNo:        z.string().min(1, 'Invoice No required'),
     invoiceDate:      z.string(),
@@ -60,7 +63,6 @@ type FormData = z.infer<typeof schema>;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DRAFT_KEY = 'purchase_form_draft';
 const GODOWNS   = [
     { value: 'main',         label: 'Main Store' },
     { value: 'cold_storage', label: 'Cold Storage' },
@@ -91,13 +93,58 @@ const isNearExpiry = (exp: string) =>
 export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     const { toast }   = useToast();
     const outletId    = useAuthStore((s) => s.user?.outletId ?? '');
+    const outlet      = useAuthStore((s) => s.outlet);
+    const user        = useAuthStore((s) => s.user);
     const gstType     = useSettingsStore((s) => s.gstType);
-    const { data: distributorsData } = useDistributors();
-    const distributors   = distributorsData ?? [];
-    const createPurchase = useCreatePurchase();
 
-    const [items,    setItems]    = useState<PurchaseItemFormData[]>([emptyItem()]);
-    const [hasDraft, setHasDraft] = useState(false);
+    // M5: scope the draft key to this outlet+user so drafts never bleed between
+    // staff members or tenants sharing the same browser.
+    const draftKey = outlet?.id && user?.id
+        ? `purchase_form_draft_${outlet.id}_${user.id}`
+        : null;
+    const createPurchase = useCreatePurchase();
+    const [partyLedger, setPartyLedger] = useState<Ledger | null>(null);
+
+    const [items,             setItems]             = useState<PurchaseItemFormData[]>([emptyItem()]);
+    const [hasDraft,          setHasDraft]          = useState(false);
+    const [ledgerAdjustment,  setLedgerAdjustment]   = useState<number>(0);
+    const [ledgerNote,        setLedgerNote]         = useState<string>('');
+
+    // ── Add-product drawer state ───────────────────────────────────────────────
+    const [drawerOpen,        setDrawerOpen]        = useState(false);
+    const [drawerInitialName, setDrawerInitialName] = useState('');
+    const [activeDrawerRow,   setActiveDrawerRow]   = useState(0);
+
+    const handleOpenAddProduct = (rowIndex: number, name: string) => {
+        setActiveDrawerRow(rowIndex);
+        setDrawerInitialName(name);
+        setDrawerOpen(true);
+    };
+
+    const handleSelectProduct = (rowIndex: number, product: ProductSearchResult) => {
+        const firstBatch = product.batches?.[0];
+        const mrp      = firstBatch?.mrp      ?? product.mrp      ?? 0;
+        const saleRate = firstBatch?.saleRate  ?? product.saleRate ?? 0;
+        const gstRate  = product.gstRate ?? 0;
+        setItems((prev) => prev.map((item, i) => {
+            if (i !== rowIndex) return item;
+            return {
+                ...item,
+                productId:   product.id,
+                productName: product.name,
+                isCustom:    false,
+                hsnCode:     product.hsnCode ?? item.hsnCode,
+                gstRate,
+                mrp,
+                saleRate,
+            };
+        }));
+    };
+
+    const handleProductCreated = (product: ProductSearchResult) => {
+        handleSelectProduct(activeDrawerRow, product);
+        toast({ title: 'Product added successfully' });
+    };
 
     const {
         register, handleSubmit, setValue, setError,
@@ -120,38 +167,40 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     // ── Draft ────────────────────────────────────────────────────────────────
 
     useEffect(() => {
-        try { if (localStorage.getItem(DRAFT_KEY)) setHasDraft(true); } catch { /* ignore */ }
-    }, []);
+        try { if (draftKey && localStorage.getItem(draftKey)) setHasDraft(true); } catch { /* ignore */ }
+    }, [draftKey]);
 
     const restoreDraft = () => {
+        if (!draftKey) return;
         try {
-            const raw = localStorage.getItem(DRAFT_KEY);
+            const raw = localStorage.getItem(draftKey);
             if (!raw) return;
             const { formValues, savedItems } = JSON.parse(raw);
             reset(formValues);
             setItems(savedItems);
             setHasDraft(false);
             toast({ title: 'Draft restored ✓' });
-        } catch { localStorage.removeItem(DRAFT_KEY); }
+        } catch { localStorage.removeItem(draftKey); }
     };
 
     const saveDraft = useCallback(() => {
+        if (!draftKey) return;
         try {
-            localStorage.setItem(DRAFT_KEY, JSON.stringify({ formValues: watch(), savedItems: items }));
+            localStorage.setItem(draftKey, JSON.stringify({ formValues: watch(), savedItems: items }));
             toast({ title: 'Draft saved' });
         } catch { /* ignore */ }
-    }, [watch, items, toast]);
+    }, [draftKey, watch, items, toast]);
 
     // Auto-save every 30 s while dirty
     useEffect(() => {
-        if (!isDirty) return;
+        if (!isDirty || !draftKey) return;
         const id = setInterval(() => {
             try {
-                localStorage.setItem(DRAFT_KEY, JSON.stringify({ formValues: watch(), savedItems: items }));
+                localStorage.setItem(draftKey, JSON.stringify({ formValues: watch(), savedItems: items }));
             } catch { /* ignore */ }
         }, 30_000);
         return () => clearInterval(id);
-    }, [isDirty, items, watch]);
+    }, [isDirty, draftKey, items, watch]);
 
     // ── Item handlers ────────────────────────────────────────────────────────
 
@@ -198,9 +247,10 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     const cgst      = gstType === 'intrastate' ? totalGST / 2 : 0;
     const igst      = gstType === 'interstate' ? totalGST     : 0;
     const freight   = Number(watchedFreight) || 0;
-    const preRound  = taxableValue + totalGST + totalCess + freight;
-    const roundOff  = Math.round(preRound) - preRound;
-    const netPayable = preRound + roundOff;
+    const preRound     = taxableValue + totalGST + totalCess + freight;
+    const roundOff     = Math.round(preRound) - preRound;
+    const computedTotal = preRound + roundOff;
+    const netPayable   = computedTotal - ledgerAdjustment;
 
     const totalUnits       = items.reduce((s, it) => s + it.qty * it.pkg, 0);
     const nearExpiryCount  = items.filter((it) => it.expiryDate && isNearExpiry(it.expiryDate)).length;
@@ -211,7 +261,7 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
         try {
             const payload = {
                 outletId,
-                distributorId:    data.distributorId,
+                partyLedgerId:    data.partyLedgerId,
                 purchaseType:     data.purchaseType,
                 invoiceNo:        data.invoiceNo,
                 invoiceDate:      data.invoiceDate,
@@ -225,8 +275,10 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                 taxableAmount:    parseFloat(taxableValue.toFixed(2)),
                 gstAmount:        parseFloat(totalGST.toFixed(2)),
                 cessAmount:       parseFloat(totalCess.toFixed(2)),
-                roundOff:         parseFloat(roundOff.toFixed(2)),
-                grandTotal:       parseFloat(netPayable.toFixed(2)),
+                roundOff:          parseFloat(roundOff.toFixed(2)),
+                ledgerAdjustment:  parseFloat(ledgerAdjustment.toFixed(2)),
+                ledgerNote:        ledgerNote || undefined,
+                grandTotal:        parseFloat(netPayable.toFixed(2)),
                 items: items.map((it) => {
                     const effQty     = it.qty * it.pkg;
                     const base       = effQty * it.purchaseRate * (1 - it.discountPct / 100) * (1 - it.cashDiscountPct / 100);
@@ -261,7 +313,7 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
             };
 
             await createPurchase.mutateAsync(payload);
-            localStorage.removeItem(DRAFT_KEY);
+            if (draftKey) localStorage.removeItem(draftKey);
             toast({
                 title:       'Purchase saved ✓',
                 description: `Invoice ${data.invoiceNo} — ${items.length} item${items.length !== 1 ? 's' : ''}, ${totalUnits} units added to stock.`,
@@ -282,6 +334,7 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     // ─── JSX ─────────────────────────────────────────────────────────────────
 
     return (
+        <>
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5">
 
             {/* ── Draft banner ────────────────────────────────────────── */}
@@ -301,7 +354,7 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                     <Button
                         type="button" size="sm" variant="ghost"
                         className="h-7 text-amber-500 hover:text-amber-700"
-                        onClick={() => { localStorage.removeItem(DRAFT_KEY); setHasDraft(false); }}
+                        onClick={() => { if (draftKey) localStorage.removeItem(draftKey); setHasDraft(false); }}
                     >
                         Discard
                     </Button>
@@ -330,28 +383,23 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
 
                 <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3">
 
-                    {/* Distributor */}
+                    {/* Party (Sundry Creditor ledger) */}
                     <div className="space-y-1.5">
                         <Label className="text-xs font-medium text-slate-600">
-                            Distributor <span className="text-red-500">*</span>
+                            Party <span className="text-red-500">*</span>
                         </Label>
-                        <Select onValueChange={(v) => setValue('distributorId', v)}>
-                            <SelectTrigger className={`h-9 text-sm ${errors.distributorId ? 'border-red-400' : ''}`}>
-                                <SelectValue placeholder="Select distributor..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {distributors.map((d: any) => (
-                                    <SelectItem key={d.id} value={d.id}>
-                                        <span className="font-medium">{d.name}</span>
-                                        {d.gstin && (
-                                            <span className="ml-2 text-xs text-slate-400">{d.gstin}</span>
-                                        )}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                        {errors.distributorId && (
-                            <p className="text-xs text-red-500">{errors.distributorId.message}</p>
+                        <LedgerPicker
+                            group="Sundry Creditors"
+                            value={partyLedger}
+                            onChange={(l) => {
+                                setPartyLedger(l);
+                                setValue('partyLedgerId', l?.id ?? '', { shouldValidate: true });
+                            }}
+                            placeholder="Select party ledger..."
+                            className={errors.partyLedgerId ? 'ring-1 ring-red-400 rounded-md' : ''}
+                        />
+                        {errors.partyLedgerId && (
+                            <p className="text-xs text-red-500">{errors.partyLedgerId.message}</p>
                         )}
                     </div>
 
@@ -511,6 +559,9 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                                     value={item}
                                     onChange={handleItemChange}
                                     onRemove={handleRemoveItem}
+                                    onSelectProduct={handleSelectProduct}
+                                    onOpenAddProduct={handleOpenAddProduct}
+                                    outletId={outletId}
                                     errors={(errors.items as any)?.[idx]}
                                 />
                             ))}
@@ -540,7 +591,46 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                 </div>
             </div>
 
-            {/* ── Section D: Bill Summary ──────────────────────────────── */}
+            {/* ── Section D: Ledger Adjustment ────────────────────────── */}
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <p className="text-sm font-semibold text-slate-700">Ledger Adjustment</p>
+                        <p className="text-xs text-slate-400">
+                            Apply credit from distributor account (return, advance, write-off)
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">− ₹</span>
+                        <input
+                            type="number"
+                            min={0}
+                            max={computedTotal}
+                            step="0.01"
+                            className="w-28 rounded border border-slate-200 bg-white px-2 py-1 text-right text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            placeholder="0.00"
+                            value={ledgerAdjustment || ''}
+                            onChange={(e) => {
+                                const val = parseFloat(e.target.value) || 0;
+                                setLedgerAdjustment(Math.min(val, computedTotal));
+                            }}
+                        />
+                    </div>
+                </div>
+
+                {ledgerAdjustment > 0 && (
+                    <div className="mt-2">
+                        <input
+                            className="w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 focus:border-blue-400 focus:outline-none"
+                            placeholder="Reason (e.g. Return CN-2024-45, Advance payment)"
+                            value={ledgerNote}
+                            onChange={(e) => setLedgerNote(e.target.value)}
+                        />
+                    </div>
+                )}
+            </div>
+
+            {/* ── Section E: Bill Summary ──────────────────────────────── */}
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-5 py-3">
                     <Calculator className="h-4 w-4 text-slate-500" />
@@ -616,6 +706,15 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                             </span>
                         </div>
 
+                        {ledgerAdjustment > 0 && (
+                            <div className="flex justify-between border-t border-dashed border-slate-200 pt-1 text-sm text-emerald-600">
+                                <span>Ledger Adjustment</span>
+                                <span className="font-mono">
+                                    − ₹{ledgerAdjustment.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </span>
+                            </div>
+                        )}
+
                         <Separator />
 
                         <div className="flex items-baseline justify-between pt-1">
@@ -659,5 +758,13 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
             </div>
 
         </form>
+
+        <AddNewProductDrawer
+            open={drawerOpen}
+            onOpenChange={setDrawerOpen}
+            initialName={drawerInitialName}
+            onSuccess={handleProductCreated}
+        />
+        </>
     );
 }

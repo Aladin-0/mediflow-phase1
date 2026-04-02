@@ -5,6 +5,7 @@ import { ShoppingCart, X, AlertTriangle, ShieldAlert } from 'lucide-react'
 import { ProductSearchResult, CartItem } from '@/types'
 import { calculateItemTotals, formatCurrency } from '@/lib/gst'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/store/authStore'
 
 // Inline date helpers to avoid external date-fns dependency in Docker
 const diffInDays = (dateStr: string) => Math.floor((new Date(dateStr).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
@@ -18,6 +19,8 @@ interface AddToCartPanelProps {
 }
 
 export function AddToCartPanel({ product, onAdd, onClose, maxDiscount }: AddToCartPanelProps) {
+    const { user } = useAuthStore()
+    const canViewRates = user?.canViewPurchaseRates ?? false
     const defaultBatch = product.batches.length > 0 
         ? [...product.batches].sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0]
         : null
@@ -119,7 +122,8 @@ export function AddToCartPanel({ product, onAdd, onClose, maxDiscount }: AddToCa
             gstAmount: gstAmount,
             totalAmount: totalAmount,
             scheduleType: product.scheduleType,
-            requiresPrescription: ['H', 'H1', 'X', 'Narcotic'].includes(product.scheduleType)
+            requiresPrescription: ['G', 'H', 'H1', 'X', 'C', 'Narcotic'].includes(product.scheduleType),
+            purchaseRate: selectedBatch.purchaseRate,
         }
 
         onAdd(item)
@@ -138,7 +142,9 @@ export function AddToCartPanel({ product, onAdd, onClose, maxDiscount }: AddToCa
 
     if (!selectedBatch) return null
 
-    const isLooseAllowed = product.packUnit?.toLowerCase() === 'tablet' || product.packUnit?.toLowerCase() === 'capsule'
+    const isLooseAllowed = 
+    ['tablet', 'capsule', 'unit', 'piece', 'drop'].includes(product.packUnit?.toLowerCase().trim() || '') || 
+    (product.packSize && product.packSize > 1);
     
     // Progress bar for discount
     const discountProgressPercentage = maxDiscount > 0 ? (discountPct / maxDiscount) * 100 : 0
@@ -340,16 +346,36 @@ export function AddToCartPanel({ product, onAdd, onClose, maxDiscount }: AddToCa
                         <span>Total Amount</span>
                         <span>{formatCurrency(totalAmount)}</span>
                     </div>
+                    {canViewRates && (
+                        <>
+                            <div className="pt-2 mt-1 border-t border-dashed border-slate-200" />
+                            <div className="flex justify-between text-slate-500 text-xs">
+                                <span>Purchase Rate</span>
+                                <span>{formatCurrency(selectedBatch.purchaseRate)}</span>
+                            </div>
+                            <div className="flex justify-between text-emerald-600 text-xs font-medium">
+                                <span>Margin</span>
+                                <span>
+                                    {formatCurrency(selectedBatch.saleRate - selectedBatch.purchaseRate)}
+                                    {selectedBatch.purchaseRate > 0 && (
+                                        <span className="ml-1 text-emerald-500">
+                                            ({(((selectedBatch.saleRate - selectedBatch.purchaseRate) / selectedBatch.purchaseRate) * 100).toFixed(1)}%)
+                                        </span>
+                                    )}
+                                </span>
+                            </div>
+                        </>
+                    )}
                 </div>
             </div>
 
             {/* Alerts */}
-            {['H', 'H1', 'X', 'Narcotic'].includes(product.scheduleType) && (
+            {['G', 'H', 'H1', 'X', 'C', 'Narcotic'].includes(product.scheduleType) && (
                 <div className={cn(
                     "flex items-start gap-3 p-3 rounded-lg border mb-4 text-sm animate-in fade-in",
-                    ['H1', 'X', 'Narcotic'].includes(product.scheduleType) ? "bg-red-50 border-red-200 text-red-800" : "bg-amber-50 border-amber-200 text-amber-800"
+                    ['H1', 'X', 'C', 'Narcotic'].includes(product.scheduleType) ? "bg-red-50 border-red-200 text-red-800" : "bg-amber-50 border-amber-200 text-amber-800"
                 )}>
-                    {['H1', 'X', 'Narcotic'].includes(product.scheduleType) ? (
+                    {['H1', 'X', 'C', 'Narcotic'].includes(product.scheduleType) ? (
                         <ShieldAlert className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
                     ) : (
                         <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
@@ -357,7 +383,7 @@ export function AddToCartPanel({ product, onAdd, onClose, maxDiscount }: AddToCa
                     <div>
                         <div className="font-semibold">Schedule {product.scheduleType} Drug</div>
                         <div className="text-xs opacity-90 mt-0.5">
-                            {['H1', 'X', 'Narcotic'].includes(product.scheduleType)
+                            {['H1', 'X', 'C', 'Narcotic'].includes(product.scheduleType)
                                 ? "Doctor details MUST be provided before saving bill"
                                 : "Prescription required at dispensing"}
                         </div>

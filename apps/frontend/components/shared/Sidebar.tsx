@@ -15,7 +15,14 @@ import {
     LayoutDashboard, Receipt, Package, ShoppingCart, Users,
     CreditCard, UserCog, CalendarCheck, BarChart3, Settings,
     Pill, ChevronLeft, ChevronRight, MoreVertical, Wallet, Building2,
+    BookOpen, ArrowUpLeft, ArrowDownLeft, List, Scale, PieChart, FileSearch,
 } from 'lucide-react';
+
+type SubNavItem = {
+    label: string;
+    href: string;
+    icon: any;
+};
 
 type NavItem = {
     label: string;
@@ -24,6 +31,7 @@ type NavItem = {
     permission: Permission | null;
     shortcut?: string;
     badge?: string;
+    subItems?: SubNavItem[];
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -83,12 +91,23 @@ const NAV_ITEMS: NavItem[] = [
         href: '/dashboard/accounts',
         icon: Wallet,
         permission: 'create_purchases' as Permission,
+        subItems: [
+            { label: 'Voucher Entry', href: '/dashboard/accounts/voucher-entry', icon: BookOpen },
+            { label: 'Purchase Returns', href: '/dashboard/accounts/purchase-returns', icon: ArrowUpLeft },
+            { label: 'Sale Returns', href: '/dashboard/accounts/sale-returns', icon: ArrowDownLeft },
+            { label: 'Ledgers', href: '/dashboard/accounts/ledgers', icon: List },
+        ],
     },
     {
         label: 'Reports',
         href: '/dashboard/reports',
         icon: BarChart3,
         permission: 'view_reports' as Permission,
+        subItems: [
+            { label: 'Trial Balance', href: '/dashboard/reports/trial-balance', icon: Scale },
+            { label: 'Balance Sheet', href: '/dashboard/reports/balance-sheet', icon: PieChart },
+            { label: 'GSTR-2A Recon', href: '/dashboard/reports/gstr2a', icon: FileSearch },
+        ],
     },
     {
         label: 'Settings',
@@ -214,6 +233,31 @@ export function Sidebar({ isCollapsed, onToggle, isMobile = false }: SidebarProp
                             </Link>
                         );
 
+                        const subItems = item.subItems && isActive && !isCollapsed ? (
+                            <div className="mt-1 ml-4 space-y-0.5 border-l border-slate-200 pl-3">
+                                {item.subItems.map((sub) => {
+                                    const subActive = pathname === sub.href || pathname.startsWith(sub.href + '/');
+                                    const SubIcon = sub.icon;
+                                    return (
+                                        <Link
+                                            key={sub.href}
+                                            href={sub.href}
+                                            onClick={isMobile ? onToggle : undefined}
+                                            className={cn(
+                                                'flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+                                                subActive
+                                                    ? 'bg-primary/10 text-primary'
+                                                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                                            )}
+                                        >
+                                            <SubIcon className="w-3.5 h-3.5 shrink-0" />
+                                            <span className="truncate">{sub.label}</span>
+                                        </Link>
+                                    );
+                                })}
+                            </div>
+                        ) : null;
+
                         if (isCollapsed && !isMobile) {
                             return (
                                 <Tooltip key={item.label}>
@@ -225,7 +269,12 @@ export function Sidebar({ isCollapsed, onToggle, isMobile = false }: SidebarProp
                             );
                         }
 
-                        return <div key={item.label}>{content}</div>;
+                        return (
+                            <div key={item.label}>
+                                {content}
+                                {subItems}
+                            </div>
+                        );
                     })}
                 </TooltipProvider>
             </div>

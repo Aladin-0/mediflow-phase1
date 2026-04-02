@@ -22,11 +22,17 @@ class MasterProduct(models.Model):
     ]
 
     SCHEDULE_TYPE_CHOICES = [
-        ('OTC', 'OTC'),
-        ('H', 'Schedule H'),
-        ('H1', 'Schedule H1'),
-        ('X', 'Schedule X'),
-        ('Narcotic', 'Narcotic'),
+        ('OTC',        'OTC / General'),
+        ('G',          'Schedule G'),
+        ('H',          'Schedule H'),
+        ('H1',         'Schedule H1'),
+        ('X',          'Schedule X'),
+        ('C',          'Schedule C (Biological)'),
+        ('Narcotic',   'Narcotic (NDPS)'),
+        ('Ayurvedic',  'Ayurvedic / Herbal'),
+        ('Surgical',   'Surgical / Device'),
+        ('Cosmetic',   'Cosmetic'),
+        ('Veterinary', 'Veterinary'),
     ]
 
     PACK_TYPE_CHOICES = [
@@ -56,6 +62,8 @@ class MasterProduct(models.Model):
     is_fridge = models.BooleanField(default=False, help_text='Requires cold storage')
     is_discontinued = models.BooleanField(default=False)
     image_url = models.URLField(null=True, blank=True)
+    mrp = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Default catalog MRP')
+    default_sale_rate = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Default selling price')
     min_qty = models.IntegerField(default=10, help_text='Low-stock threshold in strips')
     reorder_qty = models.IntegerField(default=50, help_text='Suggested reorder quantity')
     created_at = models.DateTimeField(auto_now_add=True)

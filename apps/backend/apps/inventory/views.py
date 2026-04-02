@@ -2,12 +2,13 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.core.permissions import IsManagerOrAbove
 from rest_framework import status
 from django.db.models import Q, Sum
 from django.utils import timezone
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from apps.inventory.models import MasterProduct, Batch
 from apps.core.models import Outlet
@@ -34,6 +35,8 @@ def serialize_product(product, total_stock=0, nearest_expiry="2099-12-31", is_lo
         'isFridge': product.is_fridge,
         'isDiscontinued': product.is_discontinued,
         'imageUrl': product.image_url,
+        'mrp': float(product.mrp),
+        'saleRate': float(product.default_sale_rate),
         'outletProductId': str(product.id),
         'totalStock': total_stock,
         'nearestExpiry': nearest_expiry,
@@ -67,6 +70,91 @@ class ProductListView(APIView):
         products = MasterProduct.objects.all()
         return Response([serialize_product(p) for p in products], status=status.HTTP_200_OK)
 
+    def post(self, request, *args, **kwargs):
+        data = request.data
+        name = (data.get('name') or '').strip()
+        hsn_code = (data.get('hsnCode') or '').strip()
+        pack_unit = (data.get('packUnit') or '').strip()
+        schedule_type = (data.get('scheduleType') or 'OTC').strip()
+
+        errors = {}
+        if not name:
+            errors['name'] = 'Product name is required'
+        if not hsn_code:
+            errors['hsnCode'] = 'HSN code is required'
+        if not pack_unit:
+            errors['packUnit'] = 'Pack unit is required'
+
+        try:
+            gst_rate = Decimal(str(data.get('gstRate', 0)))
+        except (InvalidOperation, TypeError):
+            errors['gstRate'] = 'Invalid GST rate'
+            gst_rate = Decimal('0')
+
+        try:
+            pack_size = int(data.get('packSize', 1))
+            if pack_size < 1:
+                errors['packSize'] = 'Pack size must be ≥ 1'
+        except (ValueError, TypeError):
+            errors['packSize'] = 'Invalid pack size'
+            pack_size = 1
+
+        try:
+            mrp = Decimal(str(data.get('mrp', 0)))
+            if mrp <= 0:
+                errors['mrp'] = 'MRP must be > 0'
+        except (InvalidOperation, TypeError):
+            errors['mrp'] = 'Invalid MRP'
+            mrp = Decimal('0')
+
+        try:
+            sale_rate = Decimal(str(data.get('saleRate', 0)))
+            if sale_rate <= 0:
+                errors['saleRate'] = 'Sale rate must be > 0'
+        except (InvalidOperation, TypeError):
+            errors['saleRate'] = 'Invalid sale rate'
+            sale_rate = Decimal('0')
+
+        if errors:
+            return Response({'errors': errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Derive drug_type from schedule_type
+        schedule_to_drug = {
+            'OTC': 'allopathy', 'G': 'allopathy', 'H': 'allopathy', 'H1': 'allopathy',
+            'X': 'allopathy', 'C': 'allopathy', 'Narcotic': 'allopathy',
+            'Ayurvedic': 'ayurveda', 'Surgical': 'allopathy',
+            'Cosmetic': 'fmcg', 'Veterinary': 'allopathy',
+        }
+        drug_type = schedule_to_drug.get(schedule_type, 'allopathy')
+
+        composition = (data.get('composition') or '')
+        manufacturer = (data.get('manufacturer') or '')
+
+        try:
+            with transaction.atomic():
+                product = MasterProduct.objects.create(
+                    name=name,
+                    composition=composition,
+                    manufacturer=manufacturer,
+                    category='general',
+                    drug_type=drug_type,
+                    schedule_type=schedule_type,
+                    hsn_code=hsn_code,
+                    gst_rate=gst_rate,
+                    pack_size=pack_size,
+                    pack_unit=pack_unit,
+                    pack_type='strip',
+                    mrp=mrp,
+                    default_sale_rate=sale_rate,
+                )
+        except IntegrityError:
+            return Response(
+                {'errors': {'hsnCode': f'A product with HSN code "{hsn_code}" already exists'}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(serialize_product(product), status=status.HTTP_201_CREATED)
+
 
 class ProductDetailView(APIView):
     permission_classes = [IsAuthenticated]
@@ -99,7 +187,7 @@ class ProductBatchesView(APIView):
 
 
 class InventoryExportCSVView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, *args, **kwargs):
         import csv
@@ -293,6 +381,8 @@ class ProductSearchView(APIView):
                 'isFridge': product.is_fridge,
                 'isDiscontinued': product.is_discontinued,
                 'imageUrl': product.image_url,
+                'mrp': float(product.mrp),
+                'saleRate': float(product.default_sale_rate),
                 'outletProductId': str(product.id),
                 'totalStock': total_stock,
                 'nearestExpiry': nearest_expiry,
@@ -443,6 +533,8 @@ class InventoryListView(APIView):
                 'isFridge': product.is_fridge,
                 'isDiscontinued': product.is_discontinued,
                 'imageUrl': product.image_url,
+                'mrp': float(product.mrp),
+                'saleRate': float(product.default_sale_rate),
                 'outletProductId': str(product.id),
                 'totalStock': total_stock,
                 'nearestExpiry': nearest_expiry,
@@ -620,7 +712,7 @@ class InventoryAdjustView(APIView):
     Adjust batch stock for damage, return, or correction.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def post(self, request, *args, **kwargs):
         """

@@ -8,6 +8,8 @@ from django.utils import timezone
 
 from apps.core.models import Outlet
 from apps.accounts.models import Staff
+from apps.accounts.models import Ledger
+from apps.accounts.journal_service import post_purchase_invoice
 from apps.inventory.models import MasterProduct, Batch
 from apps.purchases.models import PurchaseInvoice, PurchaseItem, Distributor
 from apps.billing.models import LedgerEntry, PaymentEntry, PaymentAllocation
@@ -56,12 +58,38 @@ def atomic_purchase_save(payload: Dict[str, Any], outlet_id: str, created_by_id:
 
         logger.info(f"Processing purchase for outlet {outlet.name}")
 
-        # ─── Step 2: Validate and get Distributor ────────────────────────────────────
-        distributor_id = payload.get('distributorId')
-        try:
-            distributor = Distributor.objects.get(id=distributor_id, outlet=outlet)
-        except Distributor.DoesNotExist:
-            raise PurchaseServiceError(f"Distributor {distributor_id} not found for outlet {outlet_id}")
+        # ─── Step 2: Validate and get Distributor (ledger-first or legacy) ────────────
+        party_ledger_id = payload.get('partyLedgerId')
+
+        if not party_ledger_id:
+            raise PurchaseServiceError("partyLedgerId is required")
+
+        if party_ledger_id:
+            # Marg-style: party selected as a Ledger (Sundry Creditor)
+            try:
+                party_ledger = Ledger.objects.select_related('linked_distributor').get(
+                    id=party_ledger_id, outlet=outlet
+                )
+            except Ledger.DoesNotExist:
+                raise PurchaseServiceError(f"Ledger {party_ledger_id} not found")
+
+            if party_ledger.linked_distributor:
+                distributor = party_ledger.linked_distributor
+            else:
+                # Auto-create a Distributor from ledger data and link it
+                distributor = Distributor.objects.create(
+                    outlet=outlet,
+                    name=party_ledger.name,
+                    phone=party_ledger.phone or '',
+                    address=party_ledger.address or '',
+                    city=party_ledger.station or '',
+                    state='',
+                    gstin=party_ledger.gstin or None,
+                    drug_license_no=party_ledger.dl_no or None,
+                    is_active=True,
+                )
+                party_ledger.linked_distributor = distributor
+                party_ledger.save(update_fields=['linked_distributor'])
 
         logger.info(f"Distributor: {distributor.name}")
 
@@ -105,8 +133,8 @@ def atomic_purchase_save(payload: Dict[str, Any], outlet_id: str, created_by_id:
             freight=Decimal(str(payload.get('freight', 0))),
             round_off=Decimal(str(payload.get('roundOff', 0))),
             grand_total=grand_total,
-            amount_paid=Decimal('0'),
-            outstanding=grand_total,
+            amount_paid=grand_total if purchase_type == 'cash' else Decimal('0'),
+            outstanding=Decimal('0') if purchase_type == 'cash' else grand_total,
             notes=payload.get('notes'),
             created_by=created_by,
         )
@@ -255,6 +283,44 @@ def atomic_purchase_save(payload: Dict[str, Any], outlet_id: str, created_by_id:
             running_balance=running_balance,
         )
         logger.info(f"Created LedgerEntry with running_balance={running_balance}")
+
+        # ─── Step 7a: Invoice Posting ──────────────────────────────────────────────────
+        # Post the purchase invoice to the general ledger. Always credits the
+        # Distributor Ledger (Sundry Creditors) to establish vendor billing volume.
+        try:
+            post_purchase_invoice(purchase_invoice, distributor_ledger=party_ledger)
+        except Exception as e:
+            logger.error(f"Journal posting failed for purchase {purchase_invoice.id}: {e}")
+            raise  # Re-raise to rollback entire transaction
+
+        # ─── Step 7b: Payment Posting (cash purchases only) ────────────────────────────
+        # Immediately settle the liability created in Step 7a.
+        # Dr. Distributor Ledger   grand_total
+        # Cr. Cash                 grand_total
+        if purchase_type == 'cash':
+            try:
+                from apps.accounts.journal_service import _get_ledger, _create_lines_and_update_balances
+                from apps.accounts.models import JournalEntry
+
+                cash_ledger = _get_ledger(outlet, 'Cash')
+                payment_je = JournalEntry.objects.create(
+                    outlet=outlet,
+                    source_type='PURCHASE_PAYMENT',
+                    source_id=purchase_invoice.id,
+                    date=invoice_date.date(),
+                    narration=f"Cash payment for Purchase Invoice {purchase_invoice.invoice_no}",
+                )
+                _create_lines_and_update_balances(payment_je, [
+                    ('debit',  party_ledger, grand_total),
+                    ('credit', cash_ledger,  grand_total),
+                ])
+                logger.info(
+                    f"Posted cash payment journal {payment_je.id} for purchase "
+                    f"{purchase_invoice.invoice_no} grand_total={grand_total}"
+                )
+            except Exception as e:
+                logger.error(f"Cash payment journal failed for purchase {purchase_invoice.id}: {e}")
+                raise
 
         logger.info(f"Purchase {purchase_invoice.invoice_no} completed successfully")
         return purchase_invoice

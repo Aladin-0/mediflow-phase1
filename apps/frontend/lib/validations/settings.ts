@@ -34,7 +34,8 @@ export const gstSettingsSchema = z.object({
     defaultGSTRate: z.number().min(0).max(28),
     roundOffInvoice: z.boolean(),
     showGSTBreakup: z.boolean(),
-    outletStateCode: z.string().min(2).max(2),
+    // outletStateCode is no longer a form field — it is derived automatically
+    // from outletState by settingsStore.updateOutletSettings (M9).
 });
 
 export const printerSettingsSchema = z.object({

@@ -12,7 +12,6 @@ import {
 import { useSettingsStore } from '@/store/settingsStore';
 import { useToast } from '@/hooks/use-toast';
 import { gstSettingsSchema, type GSTSettingsFormValues } from '@/lib/validations/settings';
-import { INDIAN_STATES } from '@/types';
 import { SettingsSectionHeader } from './SettingsSectionHeader';
 import { SettingsToggleRow } from './SettingsToggleRow';
 import { cn } from '@/lib/utils';
@@ -35,7 +34,7 @@ export function GSTSettingsSection({ onDirty, onSaved, discardKey }: GSTSettings
         defaultGSTRate: store.defaultGSTRate,
         roundOffInvoice: store.roundOffInvoice,
         showGSTBreakup: store.showGSTBreakup,
-        outletStateCode: store.outletStateCode,
+        // outletStateCode is derived — not included in form values
     });
 
     const { control, handleSubmit, watch, setValue, reset, formState: { isDirty } } =
@@ -56,7 +55,9 @@ export function GSTSettingsSection({ onDirty, onSaved, discardKey }: GSTSettings
     const gstType = watch('gstType');
     const enableGST = watch('enableGST');
     const defaultGSTRate = watch('defaultGSTRate');
-    const outletStateCode = watch('outletStateCode');
+    // outletStateCode is derived from outletState — read directly from store
+    const outletStateCode = store.outletStateCode;
+    const outletState = store.outletState;
 
     // Sample calculation
     const sampleMRP = 38;
@@ -115,28 +116,24 @@ export function GSTSettingsSection({ onDirty, onSaved, discardKey }: GSTSettings
                 </div>
             </div>
 
-            {/* State Code */}
+            {/* State Code — derived automatically from Outlet State (M9) */}
             <div className="space-y-1.5">
                 <Label>Your State GST Code</Label>
-                <Controller
-                    control={control}
-                    name="outletStateCode"
-                    render={({ field }) => (
-                        <Select value={field.value} onValueChange={(val) => field.onChange(val)}>
-                            <SelectTrigger className="w-full max-w-xs">
-                                <SelectValue placeholder="Select state" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {INDIAN_STATES.map((s) => (
-                                    <SelectItem key={s.code} value={s.code}>
-                                        {s.code} — {s.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    )}
-                />
-                <p className="text-xs text-muted-foreground">First 2 digits of your GSTIN</p>
+                <div className="flex items-center gap-3 h-9">
+                    <span className={cn(
+                        'inline-flex items-center justify-center w-10 h-9 rounded-md border text-sm font-mono font-semibold',
+                        outletStateCode ? 'bg-slate-100 border-slate-300 text-slate-800' : 'bg-amber-50 border-amber-300 text-amber-700'
+                    )}>
+                        {outletStateCode || '??'}
+                    </span>
+                    <span className="text-sm text-slate-600">
+                        {outletState || 'No state set'}
+                    </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                    Derived automatically from your outlet state. Change it in{' '}
+                    <span className="font-medium">Outlet Settings → State</span>.
+                </p>
             </div>
 
             {/* GST Toggles */}

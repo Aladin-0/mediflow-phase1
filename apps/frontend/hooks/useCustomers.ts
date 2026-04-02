@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { customersApi } from '@/lib/apiClient';
+import { customersApi, doctorsApi } from '@/lib/apiClient';
 import { CustomerFull, CustomerFilters } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 
@@ -76,5 +76,27 @@ export function useDoctorList() {
         queryFn: () => customersApi.getDoctors(outletId),
         staleTime: 1000 * 60 * 30,
         enabled: !!outletId,
+    });
+}
+
+export function useDoctorSearch(search: string) {
+    const outletId = useOutletId();
+    return useQuery({
+        queryKey: ['doctors', 'search', search, outletId],
+        queryFn: () => doctorsApi.search(outletId, search),
+        enabled: search.length >= 2 && !!outletId,
+        staleTime: 60_000,
+    });
+}
+
+export function useCreateDoctor() {
+    const queryClient = useQueryClient();
+    const outletId = useOutletId();
+    return useMutation({
+        mutationFn: (data: { name: string; registrationNo: string; qualification?: string; phone?: string }) =>
+            doctorsApi.create({ ...data, outletId }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['doctors'] });
+        },
     });
 }

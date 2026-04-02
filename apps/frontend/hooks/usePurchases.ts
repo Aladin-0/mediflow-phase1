@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasesApi, distributorsApi } from '@/lib/apiClient';
-import { CreatePurchasePayload } from '@/types';
+import { CreatePurchasePayload, PaginatedResponse, PurchaseInvoiceFull } from '@/types';
 import { useAuthStore } from '@/store/authStore';
 
 export function usePurchasesList(filters?: any) {
@@ -79,5 +79,15 @@ export function useUpdateDistributor() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['distributors'] });
         },
+    });
+}
+
+export function useDistributorHistory(distributorId: string | null) {
+    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    return useQuery<PaginatedResponse<PurchaseInvoiceFull>>({
+        queryKey: ['purchases', 'distributor', distributorId],
+        queryFn: () => purchasesApi.list(outletId, { distributorId: distributorId! }),
+        enabled: !!distributorId && !!outletId,
+        staleTime: 30000,
     });
 }

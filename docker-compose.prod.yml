@@ -8,5 +8,5 @@ services:
       dockerfile: ../../docker/backend.Dockerfile
   frontend:
     build:
-      context: ./apps/frontend
-      dockerfile: ../../docker/frontend.Dockerfile
+      context: .
+      dockerfile: docker/frontend.Dockerfile

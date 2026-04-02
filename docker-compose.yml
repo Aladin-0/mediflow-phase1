@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 services:
   postgres:
@@ -38,6 +38,7 @@ services:
     build:
       context: ./apps/backend
       dockerfile: ../../docker/backend.Dockerfile
+      network: host
     container_name: mediflow_backend
     restart: unless-stopped          # ← ADDED
     command: >
@@ -60,15 +61,16 @@ services:
 
   frontend:
     build:
-      context: ./apps/frontend
-      dockerfile: ../../docker/frontend.Dockerfile
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      network: host
     container_name: mediflow_frontend
     restart: unless-stopped          # ← ADDED
     command: npm run dev
     volumes:
-      - ./apps/frontend:/app
-      - /app/node_modules
-      - /app/.next
+      - ./apps/frontend:/app/apps/frontend
+      - /app/apps/frontend/node_modules
+      - /app/apps/frontend/.next
       - playwright-browsers:/ms-playwright
     ports:
       - "3000:3000"
@@ -98,6 +100,7 @@ services:
     build:
       context: ./apps/backend
       dockerfile: ../../docker/backend.Dockerfile
+      network: host
     container_name: mediflow_celery
     restart: unless-stopped
     command: celery -A mediflow worker --loglevel=info --concurrency=2

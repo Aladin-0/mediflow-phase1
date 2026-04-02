@@ -126,7 +126,7 @@ export default function InventoryPage() {
                          Export
                      </Button>
                      <PermissionGate permission="create_purchases">
-                         <Button onClick={() => router.push('/dashboard/purchases/new')}>
+                         <Button onClick={() => router.push('/dashboard/purchases')}>
                              <Plus className="w-4 h-4 mr-2" />
                              Add Stock (GRN)
                          </Button>

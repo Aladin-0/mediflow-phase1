@@ -1,11 +1,13 @@
 'use client'
 
-import { useState } from 'react'
 import { ShoppingCart, X, Trash2, UserPlus, Minus, Plus } from 'lucide-react'
 import { useBillingStore } from '@/store/billingStore'
+import { useAuthStore } from '@/store/authStore'
 import { formatCurrency } from '@/lib/gst'
-import { cn } from '@/lib/utils'
+import { cn, formatQty } from '@/lib/utils'
+import { SCHEDULE_MARKERS } from '@/constants/scheduleTypes'
 import { ScheduleHAlert } from './ScheduleHAlert'
+import { CustomerSelector } from './CustomerSelector'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
@@ -19,15 +21,25 @@ interface BillingCartProps {
 export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
     const {
         cart,
-        customer,
+        customerLedger,
+        setCustomerLedger,
         getTotals,
         isPinVerified,
         updateCartItem,
         removeFromCart,
-        clearCart
+        clearCart,
+        applyDiscountToItem,
+        extraDiscountPct,
+        setExtraDiscountPct,
     } = useBillingStore()
 
+    const { user } = useAuthStore()
+    const canViewRates = user?.canViewPurchaseRates ?? false
+
     const totals = getTotals()
+    const totalCost = canViewRates
+        ? cart.reduce((sum, item) => sum + (item.purchaseRate ?? 0) * item.totalQty, 0)
+        : 0
 
     const handleQtyChange = (batchId: string, currentTotalQty: number, packSize: number, delta: number, currentStrips: number, currentLoose: number) => {
         // Find if we are operating in loose or strip mode based on what's in cart.
@@ -54,8 +66,8 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
         })
     }
 
-    const CartContent = () => (
-        <div className="flex flex-col h-full bg-white">
+    return (
+        <div className="h-full w-full border-l border-slate-200 flex flex-col bg-white shadow-[-4px_0_24px_-16px_rgba(0,0,0,0.1)]">
             {/* Header */}
             <div className="px-4 py-3 border-b flex justify-between items-center bg-white z-10 shrink-0">
                 <div className="flex items-center gap-2">
@@ -65,20 +77,27 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                     </span>
                 </div>
 
-                {customer ? (
-                    <div className="bg-blue-50 text-blue-700 text-xs border border-blue-200 rounded-lg px-2 py-1 flex items-center gap-1.5 max-w-[150px]">
-                        <span className="truncate">{customer.name}</span>
-                        <button 
-                            onClick={clearCart /* placeholder for remove customer specifically */}
-                            className="hover:bg-blue-200/50 rounded-full p-0.5"
+                {customerLedger ? (
+                    <div className="bg-blue-50 text-blue-700 text-xs border border-blue-200 rounded-lg px-2 py-1 flex items-center gap-1.5 max-w-[160px]">
+                        <span className="truncate font-medium">{customerLedger.name}</span>
+                        {customerLedger.currentBalance > 0 && (
+                            <span className="text-red-600 font-semibold shrink-0">
+                                {formatCurrency(customerLedger.currentBalance)} due
+                            </span>
+                        )}
+                        <button
+                            onClick={() => setCustomerLedger(null)}
+                            className="hover:bg-blue-200/50 rounded-full p-0.5 shrink-0"
                         >
                             <X className="w-3 h-3" />
                         </button>
                     </div>
                 ) : (
-                    <button className="text-sm font-medium text-primary hover:underline flex items-center gap-1">
-                        Add Customer <UserPlus className="w-4 h-4" />
-                    </button>
+                    <CustomerSelector>
+                        <button className="text-sm font-medium text-primary hover:underline flex items-center gap-1">
+                            Add Party <UserPlus className="w-4 h-4" />
+                        </button>
+                    </CustomerSelector>
                 )}
             </div>
 
@@ -122,9 +141,9 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                                                 Exp: {new Date(item.expiryDate).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}
                                             </span>
                                         </div>
-                                        {item.scheduleType !== 'OTC' && (
-                                            <span className={cn("text-[10px] font-semibold px-1 rounded border", ['H1', 'X', 'Narcotic'].includes(item.scheduleType) ? "bg-red-50 text-red-600 border-red-200" : "bg-amber-50 text-amber-600 border-amber-200")}>
-                                                {item.scheduleType}
+                                        {SCHEDULE_MARKERS[item.scheduleType] && (
+                                            <span className={cn("text-[10px] font-semibold px-1 rounded border", ['H1', 'X', 'C', 'Narcotic'].includes(item.scheduleType) ? "bg-red-50 text-red-600 border-red-200" : "bg-amber-50 text-amber-600 border-amber-200")}>
+                                                {SCHEDULE_MARKERS[item.scheduleType]}
                                             </span>
                                         )}
                                     </div>
@@ -166,19 +185,44 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                                             <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
                                                 {item.qtyStrips > 0 ? 'Strips' : 'Loose'}
                                             </span>
+                                            {item.qtyStrips === 0 && item.qtyLoose >= item.packSize && (
+                                                <span className="text-[10px] text-slate-400">
+                                                    = {formatQty(0, item.qtyLoose, item.packSize)}
+                                                </span>
+                                            )}
                                         </div>
 
-                                        <div className="text-right">
-                                            {item.discountPct > 0 && (
-                                                <div className="flex items-center justify-end gap-1.5 mb-0.5">
-                                                    <span className="text-xs text-muted-foreground line-through decoration-slate-300">
-                                                        {formatCurrency(item.mrp * item.totalQty)}
-                                                    </span>
-                                                    <span className="text-[10px] bg-green-100 text-green-700 font-semibold rounded px-1 py-0.5">
-                                                        {item.discountPct}% OFF
-                                                    </span>
-                                                </div>
-                                            )}
+                                        <div className="flex flex-col items-end gap-1.5">
+                                            <div className="flex items-center gap-1">
+                                                <span className="text-[10px] text-muted-foreground">Disc</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    max="100"
+                                                    step="0.01"
+                                                    value={item.discountPct.toFixed(2)}
+                                                    onChange={(e) => {
+                                                        const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                                        applyDiscountToItem(item.batchId, pct);
+                                                    }}
+                                                    className="w-16 h-7 text-center text-xs border border-slate-200 rounded px-1 focus:outline-none focus:border-primary/50"
+                                                />
+                                                <span className="text-[10px] text-muted-foreground">%</span>
+                                                <span className="text-[10px] text-muted-foreground">₹</span>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    value={(item.mrp * item.discountPct / 100 * item.totalQty).toFixed(2)}
+                                                    onChange={(e) => {
+                                                        const discAmt = Math.max(0, parseFloat(e.target.value) || 0);
+                                                        const base = item.mrp * item.totalQty;
+                                                        const pct = base > 0 ? Math.min(100, (discAmt / base) * 100) : 0;
+                                                        applyDiscountToItem(item.batchId, pct);
+                                                    }}
+                                                    className="w-20 h-7 text-center text-xs border border-slate-200 rounded px-1 focus:outline-none focus:border-primary/50"
+                                                />
+                                            </div>
                                             <div data-testid={`line-total-${index}`} className="text-sm font-bold text-slate-900">
                                                 {formatCurrency((item.mrp * (1 - item.discountPct / 100)) * item.totalQty)}
                                             </div>
@@ -205,10 +249,42 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                     </div>
                     {totals.discountAmount > 0 && (
                         <div className="flex justify-between text-green-600 font-medium">
-                            <span>Discount</span>
+                            <span>Item Discount</span>
                             <span>-{formatCurrency(totals.discountAmount)}</span>
                         </div>
                     )}
+                    <div className="flex items-center justify-between text-slate-500">
+                        <span>Extra Discount</span>
+                        <div className="flex items-center gap-1">
+                            <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="0.01"
+                                value={extraDiscountPct.toFixed(2)}
+                                onChange={(e) => {
+                                    const pct = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                    setExtraDiscountPct(pct);
+                                }}
+                                className="w-16 h-7 text-center text-xs border border-slate-200 rounded px-1 focus:outline-none focus:border-primary/50"
+                            />
+                            <span className="text-xs text-slate-500">%</span>
+                            <span className="text-xs text-slate-500">₹</span>
+                            <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={totals.extraDiscountAmount.toFixed(2)}
+                                onChange={(e) => {
+                                    const discAmt = Math.max(0, parseFloat(e.target.value) || 0);
+                                    const base = totals.subtotal - totals.discountAmount;
+                                    const pct = base > 0 ? Math.min(100, (discAmt / base) * 100) : 0;
+                                    setExtraDiscountPct(pct);
+                                }}
+                                className="w-20 h-7 text-center text-xs border border-slate-200 rounded px-1 focus:outline-none focus:border-primary/50"
+                            />
+                        </div>
+                    </div>
                     <div className="flex justify-between text-slate-600 pt-1.5 border-t border-slate-200/60 mt-1.5">
                         <span>Taxable Amount</span>
                         <span>{formatCurrency(totals.taxableAmount)}</span>
@@ -217,10 +293,24 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                         <span>CGST/SGST</span>
                         <span data-testid="cart-gst">{formatCurrency(totals.cgstAmount + totals.sgstAmount)}</span>
                     </div>
+                    {canViewRates && (
+                        <>
+                            <div className="flex justify-between text-emerald-600 text-xs font-medium pt-1">
+                                <span>Total Cost (Purchase)</span>
+                                <span>{formatCurrency(totalCost)}</span>
+                            </div>
+                            <div className="flex justify-between text-emerald-600 text-xs font-medium">
+                                <span>Est. Margin</span>
+                                <span>{formatCurrency(totals.grandTotal - totalCost)}</span>
+                            </div>
+                        </>
+                    )}
                     <div className="flex justify-between items-end pt-2 mt-2 border-t border-slate-200">
                         <span className="font-semibold text-slate-900">Grand Total</span>
                         <div className="text-right">
-                            <span data-testid="cart-total" className="font-bold text-xl text-slate-900 leading-none">{formatCurrency(totals.grandTotal)}</span>
+                            <span data-testid="cart-total" className="font-bold text-xl text-slate-900 leading-none">
+                                {formatCurrency(totals.grandTotal)}
+                            </span>
                         </div>
                     </div>
                     {totals.amountDue > 0 && totals.amountPaid > 0 && (
@@ -260,12 +350,6 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                     </div>
                 </div>
             </div>
-        </div>
-    )
-
-    return (
-        <div className="h-full w-full border-l border-slate-200 flex flex-col shadow-[-4px_0_24px_-16px_rgba(0,0,0,0.1)]">
-            <CartContent />
         </div>
     )
 }

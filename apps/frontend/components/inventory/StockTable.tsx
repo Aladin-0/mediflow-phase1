@@ -19,6 +19,7 @@ import { formatCurrency } from '@/lib/gst';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PermissionGate } from '@/components/shared/PermissionGate';
 import { useDebounce } from '@/hooks/useDebounce';
+import { SCHEDULE_TYPE_OPTIONS } from '@/constants/scheduleTypes';
 
 export function StockTable({ onProductClick, onAdjustClick }: any) {
     const { filters, setFilter, clearFilters } = useInventoryFilters();
@@ -66,12 +67,18 @@ export function StockTable({ onProductClick, onAdjustClick }: any) {
             header: ({ column }) => <SortableHeader column={column} title="Schedule" />,
             cell: ({ row }) => {
                 const s = row.original.scheduleType;
-                const colors: any = {
-                    OTC: 'bg-green-100 text-green-700',
-                    H: 'bg-amber-100 text-amber-700',
-                    H1: 'bg-orange-100 text-orange-700',
-                    X: 'bg-red-100 text-red-700',
-                    Narcotic: 'bg-purple-100 text-purple-700',
+                const colors: Record<string, string> = {
+                    OTC:        'bg-green-100 text-green-700',
+                    G:          'bg-blue-100 text-blue-700',
+                    H:          'bg-amber-100 text-amber-700',
+                    H1:         'bg-orange-100 text-orange-700',
+                    X:          'bg-red-100 text-red-700',
+                    C:          'bg-cyan-100 text-cyan-700',
+                    Narcotic:   'bg-purple-100 text-purple-700',
+                    Ayurvedic:  'bg-emerald-100 text-emerald-700',
+                    Surgical:   'bg-slate-100 text-slate-700',
+                    Cosmetic:   'bg-pink-100 text-pink-700',
+                    Veterinary: 'bg-amber-100 text-amber-800',
                 };
                 return (
                     <div className="w-20 text-center">
@@ -89,13 +96,34 @@ export function StockTable({ onProductClick, onAdjustClick }: any) {
             cell: ({ row }) => {
                 const p = row.original;
                 const qtyStrips = p.totalStock;
+                
+                // Safely calculate total loose items across all batches
+                const qtyLoose = p.batches?.reduce((sum: number, b: any) => sum + (Number(b.qtyLoose) || 0), 0) || 0;
+                
+                // Use dynamic labels based on the packaging setup
+                const packTypeLabel = p.packType ? `${p.packType}s` : 'strips';
+                const packUnitLabel = p.packUnit ? `${p.packUnit}s` : 'loose';
+
                 let color = "text-slate-900";
-                if (qtyStrips === 0) color = "text-red-600 font-bold";
+                if (qtyStrips === 0 && qtyLoose === 0) color = "text-red-600 font-bold";
                 else if (p.isLowStock) color = "text-red-600 font-bold";
 
                 return (
                     <div className="w-32 text-right">
-                        <div className={`text-sm ${color}`}>{qtyStrips === 0 ? "Out of stock" : `${qtyStrips} strips`}</div>
+                        {qtyStrips === 0 && qtyLoose === 0 ? (
+                            <div className={`text-sm ${color}`}>Out of stock</div>
+                        ) : (
+                            <div className="flex flex-col items-end">
+                                <div className={`text-sm font-medium ${color}`}>
+                                    {qtyStrips} {packTypeLabel.toLowerCase()}
+                                </div>
+                                {qtyLoose > 0 && (
+                                    <div className="text-xs text-slate-500 mt-0.5 bg-slate-100 px-1.5 py-0.5 rounded">
+                                        + {qtyLoose} {packUnitLabel.toLowerCase()}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 )
             }
@@ -197,11 +225,9 @@ export function StockTable({ onProductClick, onAdjustClick }: any) {
                       </SelectTrigger>
                       <SelectContent>
                            <SelectItem value="all">All Types</SelectItem>
-                           <SelectItem value="OTC">OTC</SelectItem>
-                           <SelectItem value="H">H</SelectItem>
-                           <SelectItem value="H1">H1</SelectItem>
-                           <SelectItem value="X">X</SelectItem>
-                           <SelectItem value="Narcotic">Narcotic</SelectItem>
+                           {SCHEDULE_TYPE_OPTIONS.map((opt) => (
+                               <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                           ))}
                       </SelectContent>
                  </Select>
 

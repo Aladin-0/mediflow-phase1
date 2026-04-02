@@ -1,6 +1,47 @@
 from django.db import models
 import uuid
 
+# GST state codes per GSTN portal — mirrors packages/constants/index.ts STATE_CODES.
+# Always derive state_code from state using this map; never store it independently.
+_STATE_CODES: dict[str, str] = {
+    'Jammu & Kashmir': '01',
+    'Himachal Pradesh': '02',
+    'Punjab': '03',
+    'Chandigarh': '04',
+    'Uttarakhand': '05',
+    'Haryana': '06',
+    'Delhi': '07',
+    'Rajasthan': '08',
+    'Uttar Pradesh': '09',
+    'Bihar': '10',
+    'Sikkim': '11',
+    'Arunachal Pradesh': '12',
+    'Nagaland': '13',
+    'Manipur': '14',
+    'Mizoram': '15',
+    'Tripura': '16',
+    'Meghalaya': '17',
+    'Assam': '18',
+    'West Bengal': '19',
+    'Jharkhand': '20',
+    'Odisha': '21',
+    'Chhattisgarh': '22',
+    'Madhya Pradesh': '23',
+    'Gujarat': '24',
+    'Dadra & Nagar Haveli and Daman & Diu': '26',
+    'Maharashtra': '27',
+    'Karnataka': '29',
+    'Goa': '30',
+    'Lakshadweep': '31',
+    'Kerala': '32',
+    'Tamil Nadu': '33',
+    'Puducherry': '34',
+    'Andaman & Nicobar Islands': '35',
+    'Telangana': '36',
+    'Andhra Pradesh': '37',
+    'Ladakh': '38',
+}
+
 
 class OutletFilteredManager(models.Manager):
     """Custom manager that filters queries by outletId for outlet-specific models."""
@@ -46,6 +87,8 @@ class Outlet(models.Model):
     address = models.TextField()
     city = models.CharField(max_length=100)
     state = models.CharField(max_length=100)
+    state_code = models.CharField(max_length=2, blank=True, default='',
+                                  help_text='2-digit GST state code, derived from state on save')
     pincode = models.CharField(max_length=10)
     gstin = models.CharField(max_length=15, unique=True)
     drug_license_no = models.CharField(max_length=100, unique=True)
@@ -63,6 +106,11 @@ class Outlet(models.Model):
         indexes = [
             models.Index(fields=['organization', 'is_active']),
         ]
+
+    def save(self, *args, **kwargs):
+        # M9: always derive state_code from state so they never drift.
+        self.state_code = _STATE_CODES.get(self.state, '')
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

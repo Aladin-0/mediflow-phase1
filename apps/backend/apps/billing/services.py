@@ -55,28 +55,36 @@ def fefo_batch_select(outlet_id: str, product_id: str, qty_strips_needed: int) -
     except MasterProduct.DoesNotExist:
         raise InsufficientStockError(f"Product {product_id} not found")
 
-    # Query available batches: outlet, product, qty_strips > 0, not expired
+    # H4: SELECT FOR UPDATE locks matched batch rows for the duration of the
+    # enclosing transaction.atomic() in the billing view.  Any concurrent bill
+    # targeting the same batches will block here until this transaction commits
+    # or rolls back, preventing the double-deduct race condition.
     today = timezone.now().date()
-    batches = Batch.objects.filter(
-        outlet=outlet,
-        product=product,
-        qty_strips__gt=0,
-        expiry_date__gt=today,
-        is_active=True,
-    ).order_by('expiry_date')
+    batches = list(
+        Batch.objects.select_for_update().filter(
+            outlet=outlet,
+            product=product,
+            qty_strips__gt=0,
+            expiry_date__gt=today,
+            is_active=True,
+        ).order_by('expiry_date')
+    )
+
+    # Evaluate total_available AFTER the lock so we see the committed
+    # post-deduction quantities from any transaction that beat us here.
+    total_available = sum(batch.qty_strips for batch in batches)
 
     logger.info(
         f"FEFO selection for product {product.name} at outlet {outlet.name}: "
-        f"need {qty_strips_needed} strips, found {len(batches)} available batches"
+        f"need {qty_strips_needed} strips, found {len(batches)} locked batches "
+        f"with {total_available} total available"
     )
-
-    # Calculate total available stock
-    total_available = sum(batch.qty_strips for batch in batches)
 
     if total_available < qty_strips_needed:
         raise InsufficientStockError(
-            f"Insufficient stock for product {product.name} at outlet {outlet.name}. "
-            f"Required: {qty_strips_needed} strips, Available: {total_available} strips"
+            f"Insufficient stock for {product.name} — another bill may have used "
+            f"the last units. Please refresh and retry. "
+            f"(Required: {qty_strips_needed}, Available: {total_available})"
         )
 
     # Auto-split across batches (FEFO allocation)
@@ -127,7 +135,7 @@ def schedule_h_validate(cart_items: List[Dict[str, Any]], schedule_h_data: Optio
     """
 
     # Controlled schedule types that require doctor/patient details
-    CONTROLLED_SCHEDULES = {'H', 'H1', 'X', 'Narcotic'}
+    CONTROLLED_SCHEDULES = {'G', 'H', 'H1', 'X', 'C', 'Narcotic'}
 
     # Check if cart contains any Schedule H drugs
     has_schedule_h = any(
@@ -145,9 +153,18 @@ def schedule_h_validate(cart_items: List[Dict[str, Any]], schedule_h_data: Optio
             "Schedule H/H1/X/Narcotic drugs require doctor and patient details"
         )
 
-    # Verify all required fields are present and non-empty
-    required_fields = ['patientName', 'patientAge', 'patientAddress', 'doctorName', 'doctorRegNo', 'prescriptionNo']
-    missing_fields = [field for field in required_fields if not schedule_h_data.get(field)]
+    # Verify required fields are present and non-empty
+    # prescriptionNo is optional — some pharmacies don't track it
+    required_fields = ['patientName', 'patientAddress', 'doctorName', 'doctorRegNo']
+    missing_fields = [f for f in required_fields if not (schedule_h_data.get(f) or '').strip()]
+
+    # patientAge must be a positive number (0 is invalid)
+    patient_age = schedule_h_data.get('patientAge')
+    try:
+        if not patient_age or int(patient_age) < 1:
+            missing_fields.append('patientAge')
+    except (TypeError, ValueError):
+        missing_fields.append('patientAge')
 
     if missing_fields:
         raise ScheduleHViolationError(

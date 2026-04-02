@@ -6,7 +6,6 @@ import { useBillingStore } from '@/store/billingStore';
 import { useAuthStore } from '@/store/authStore';
 import { salesApi } from '@/lib/apiClient';
 import { PaymentSplit } from '@/types';
-import { saveOfflineBill } from '@/lib/offline-db';
 
 export function useSaveBill() {
     const billingStore = useBillingStore();
@@ -21,11 +20,25 @@ export function useSaveBill() {
         try {
             const cart = useBillingStore.getState().cart;
             const customer = useBillingStore.getState().customer;
+            const customerLedger = useBillingStore.getState().customerLedger;
             const doctor = useBillingStore.getState().doctor;
             const activeStaff = useBillingStore.getState().activeStaff;
             const scheduleHData = useBillingStore.getState().scheduleHData;
             const totals = useBillingStore.getState().getTotals();
-            const { outlet } = useAuthStore.getState();
+            const extraDiscountPct = useBillingStore.getState().extraDiscountPct || 0;
+            const { outlet, user } = useAuthStore.getState();
+
+            // M13: Require a valid session before touching the backend.
+            // Never fall back to hardcoded demo values — a bill without a real
+            // outletId or billedBy cannot be audited and would pass backend checks
+            // silently on a misconfigured tenant.
+            if (!outlet?.id || !activeStaff?.id) {
+                throw {
+                    type: 'AUTH_ERROR',
+                    message: 'Your session has expired. Please log in again.',
+                    requiresReauth: true,
+                };
+            }
 
             const getPaid = (method: string) => {
                 if (payment.method === method) return payment.amount;
@@ -36,15 +49,22 @@ export function useSaveBill() {
             };
 
             const payload = {
-                outletId: outlet?.id || 'demo-outlet',
-                customerId: customer?.id,
+                outletId: outlet.id,
+                // Ledger-first (Marg-style): prefer partyLedgerId; fall back to legacy customerId
+                partyLedgerId: customerLedger?.id,
+                customerId: customerLedger ? undefined : customer?.id,
                 doctorId: doctor?.id,
-                billedBy: activeStaff?.id || 'unknown_staff',
+                billedBy: activeStaff.id,
                 items: cart.map((item: any) => {
                     const rawTotal = item.rate * item.totalQty;
                     const gstRate = item.gstRate || 0;
-                    const taxable = gstRate > 0 ? rawTotal / (1 + gstRate / 100) : rawTotal;
-                    const gst = rawTotal - taxable;
+                    // Apply extra discount before GST extraction (matches getTotals & backend)
+                    const discountFactor = extraDiscountPct > 0 ? 1 - extraDiscountPct / 100 : 1;
+                    const discountedTotal = rawTotal * discountFactor;
+                    const taxable = gstRate > 0
+                        ? Number((discountedTotal / (1 + gstRate / 100)).toFixed(2))
+                        : Number(discountedTotal.toFixed(2));
+                    const gst = Number((discountedTotal - taxable).toFixed(2));
                     return {
                         batchId: item.batchId,
                         productId: item.productId,
@@ -55,9 +75,9 @@ export function useSaveBill() {
                         discountPct: item.discountPct,
                         gstRate: item.gstRate,
                         scheduleType: item.scheduleType || 'OTC',
-                        taxableAmount: Number(taxable.toFixed(2)),
-                        gstAmount: Number(gst.toFixed(2)),
-                        totalAmount: Number(rawTotal.toFixed(2)),
+                        taxableAmount: taxable,
+                        gstAmount: gst,
+                        totalAmount: Number(discountedTotal.toFixed(2)),
                     };
                 }),
                 subtotal: Number(totals.subtotal.toFixed(2)),
@@ -71,6 +91,7 @@ export function useSaveBill() {
                 igst: 0,
                 roundOff: Number(totals.roundOff.toFixed(2)),
                 grandTotal: Number(totals.grandTotal.toFixed(2)),
+                extraDiscountPct,
                 paymentMode: payment.method,
                 cashPaid: getPaid('cash'),
                 upiPaid: getPaid('upi'),
@@ -79,52 +100,50 @@ export function useSaveBill() {
                 scheduleHData: (totals.requiresDoctorDetails || totals.hasScheduleH) ? scheduleHData : undefined,
             };
 
+            // Try to create via API — no offline fallback (C4).
+            // On network failure the cart stays intact and the cashier must retry.
             let invoice;
-
             try {
-                // Try to create via API
                 invoice = await salesApi.create(payload as never);
                 // If the create response didn't include items, fetch the full invoice
                 if ((invoice as any).id && !((invoice as any).items?.length)) {
                     try {
-                        invoice = await salesApi.getById((invoice as any).id);
+                        invoice = await salesApi.getById((invoice as any).id, outlet?.id);
                     } catch {
                         // fallback to create response
                     }
                 }
             } catch (err: unknown) {
-                // Determine if it is a network error (e.g., navigator offline or generic fetch failure)
-                const isNetworkError = !navigator.onLine || (err instanceof TypeError && err.message === 'Failed to fetch');
+                const isNetworkError =
+                    !navigator.onLine ||
+                    (err instanceof TypeError && err.message === 'Failed to fetch');
                 if (isNetworkError) {
-                    await saveOfflineBill(payload);
-                    const mockOfflineId = `OFFLINE-${Date.now().toString().slice(-6)}`;
-                    invoice = {
-                        id: mockOfflineId,
-                        invoiceNo: mockOfflineId,
-                        outletId: payload.outletId,
-                        // ... construct a mock invoice for the UI success screen to render ...
-                        items: payload.items.map((i: any) => ({ ...i, id: `item-${Date.now()}` })),
-                        subtotal: totals.subtotal,
-                        discountAmount: totals.discountAmount,
-                        cgst: totals.cgst,
-                        sgst: totals.sgst,
-                        igst: totals.igst,
-                        taxableAmount: totals.taxableAmount,
-                        roundOff: totals.roundOff,
-                        grandTotal: totals.grandTotal,
-                        paymentMode: payment.method,
-                        amountPaid: payment.amount,
-                        createdAt: new Date().toISOString()
+                    throw {
+                        type: 'NETWORK_ERROR',
+                        message:
+                            'Cannot save bill — no connection to server. ' +
+                            'Please check your internet connection and try again. ' +
+                            'Do NOT dispense medicines until the bill is confirmed.',
+                        canRetry: true,
                     };
-                    console.log('Saved offline invoice context:', mockOfflineId);
-                } else {
-                    // It was a real API error response (e.g. 400 Bad Request)
-                    throw err;
                 }
+                // Real API error (400, 500, etc.) — propagate as-is
+                throw err;
             }
 
+            // Capture doctor/customer before clearCart clears them
+            const savedDoctor = useBillingStore.getState().doctor;
+            const savedCustomer = useBillingStore.getState().customer;
+            const savedScheduleH = useBillingStore.getState().scheduleHData;
+            const enrichedInvoice = {
+                ...invoice,
+                customer: (invoice as any).customer ?? savedCustomer ?? undefined,
+                doctorName: savedDoctor?.name ?? savedScheduleH?.doctorName ?? undefined,
+                doctorRegNo: savedDoctor?.regNo ?? savedScheduleH?.doctorRegNo ?? undefined,
+            };
+
             // On Success (Online or Offline):
-            useBillingStore.getState().setLastInvoice(invoice as any);
+            useBillingStore.getState().setLastInvoice(enrichedInvoice as any);
             useBillingStore.getState().clearCart();
             useBillingStore.getState().incrementBillsToday();
 
@@ -136,7 +155,10 @@ export function useSaveBill() {
             return invoice;
 
         } catch (err: any) {
-            const message = err?.error?.message ?? 'Failed to save bill. Please try again.';
+            const message =
+                err?.message ??          // NETWORK_ERROR shape
+                err?.error?.message ??   // API error shape { error: { message } }
+                'Failed to save bill. Please try again.';
             setError(message);
             throw err;
         } finally {

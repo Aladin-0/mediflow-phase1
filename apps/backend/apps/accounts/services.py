@@ -2,12 +2,15 @@ from decimal import Decimal
 from datetime import date
 from django.db import transaction
 from django.core.exceptions import ValidationError
+import logging
 
 from apps.accounts.models import (
-    LedgerGroup, Ledger, Voucher, VoucherLine,
+    LedgerGroup, Ledger, Voucher, VoucherLine, VoucherBillAdjustment,
     DebitNote, DebitNoteItem, CreditNote, CreditNoteItem,
     Customer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LedgerService:
@@ -189,7 +192,120 @@ class VoucherService:
                 line.get('credit', 0),
             )
 
+        # Process bill adjustments (Receipt/Payment only)
+        for adj in data.get('bill_adjustments', []):
+            invoice_type = adj.get('invoice_type')
+            adjusted_amount = Decimal(str(adj.get('adjusted_amount', 0)))
+            if adjusted_amount <= 0:
+                continue
+
+            if invoice_type == 'sale':
+                sale_inv_id = adj.get('invoice_id')
+                VoucherBillAdjustment.objects.create(
+                    voucher=voucher,
+                    invoice_type='sale',
+                    sale_invoice_id=sale_inv_id,
+                    adjusted_amount=adjusted_amount,
+                )
+                # Reduce customer outstanding
+                try:
+                    from apps.billing.models import SaleInvoice
+                    inv = SaleInvoice.objects.select_related('customer').get(id=sale_inv_id)
+                    if inv.customer_id:
+                        customer = Customer.objects.select_for_update().get(
+                            id=inv.customer_id, outlet_id=outlet_id
+                        )
+                        customer.outstanding = max(
+                            Decimal('0'), customer.outstanding - adjusted_amount
+                        )
+                        customer.save(update_fields=['outstanding'])
+                except Exception:
+                    pass
+
+            elif invoice_type == 'purchase':
+                purchase_inv_id = adj.get('invoice_id')
+                VoucherBillAdjustment.objects.create(
+                    voucher=voucher,
+                    invoice_type='purchase',
+                    purchase_invoice_id=purchase_inv_id,
+                    adjusted_amount=adjusted_amount,
+                )
+                # Reduce purchase invoice outstanding
+                try:
+                    from apps.purchases.models import PurchaseInvoice
+                    inv = PurchaseInvoice.objects.select_for_update().get(id=purchase_inv_id)
+                    inv.outstanding = max(Decimal('0'), inv.outstanding - adjusted_amount)
+                    inv.save(update_fields=['outstanding'])
+                except Exception:
+                    pass
+
+        # Post journal entry to general ledger (auto journal posting)
+        try:
+            from apps.accounts.journal_service import post_voucher
+            post_voucher(voucher)
+        except Exception as e:
+            logger.error(f"Journal posting failed for voucher {voucher.id}: {e}")
+            raise  # Re-raise to rollback entire transaction
+
         return voucher
+
+    @staticmethod
+    def get_pending_bills(outlet_id, ledger_id):
+        """
+        Return unpaid/partially paid invoices for a ledger.
+        For Sundry Debtor ledgers: returns SaleInvoices for linked customer.
+        For Sundry Creditor ledgers: returns PurchaseInvoices for linked distributor.
+        """
+        from decimal import Decimal as D
+        try:
+            ledger = Ledger.objects.select_related('group').get(id=ledger_id, outlet_id=outlet_id)
+        except Ledger.DoesNotExist:
+            return []
+
+        result = []
+        group_name = ledger.group.name
+
+        if group_name == 'Sundry Debtors' and ledger.linked_customer_id:
+            from apps.billing.models import SaleInvoice
+            from django.db.models import Sum
+            invoices = SaleInvoice.objects.filter(
+                outlet_id=outlet_id,
+                customer_id=ledger.linked_customer_id,
+                payment_mode='credit',
+            ).order_by('invoice_date')
+            for inv in invoices:
+                already_adjusted = VoucherBillAdjustment.objects.filter(
+                    sale_invoice_id=inv.id
+                ).aggregate(total=Sum('adjusted_amount'))['total'] or D('0')
+                outstanding = max(D('0'), inv.grand_total - already_adjusted)
+                if outstanding > 0:
+                    result.append({
+                        'id': str(inv.id),
+                        'invoiceNo': inv.invoice_no,
+                        'date': str(inv.invoice_date.date()),
+                        'grandTotal': float(inv.grand_total),
+                        'outstanding': float(outstanding),
+                        'invoiceType': 'sale',
+                    })
+
+        elif group_name == 'Sundry Creditors' and ledger.linked_distributor_id:
+            from apps.purchases.models import PurchaseInvoice
+            invoices = PurchaseInvoice.objects.filter(
+                outlet_id=outlet_id,
+                distributor_id=ledger.linked_distributor_id,
+                outstanding__gt=0,
+            ).order_by('date')
+            for inv in invoices:
+                result.append({
+                    'id': str(inv.id),
+                    'invoiceNo': inv.invoice_no,
+                    'date': str(inv.date),
+                    'grandTotal': float(inv.grand_total),
+                    'outstanding': float(inv.outstanding),
+                    'invoiceType': 'purchase',
+                })
+
+        return result
 
 
 class DebitNoteService:
@@ -226,8 +342,20 @@ class DebitNoteService:
             created_by_id=staff_id,
         )
 
+        ZERO_UUID = '00000000-0000-0000-0000-000000000000'
         for item in items_data:
-            batch = Batch.objects.select_for_update().get(id=item['batch_id'])
+            batch_id = item.get('batch_id')
+            if not batch_id or str(batch_id) == ZERO_UUID:
+                raise ValidationError(
+                    f"Missing batch for item '{item.get('product_name', '?')}'. "
+                    "Please select the item from a purchase invoice."
+                )
+            try:
+                batch = Batch.objects.select_for_update().get(id=batch_id)
+            except Batch.DoesNotExist:
+                raise ValidationError(
+                    f"Batch not found for item '{item.get('product_name', '?')}' (id={batch_id})."
+                )
             qty = Decimal(str(item['qty']))
 
             DebitNoteItem.objects.create(
@@ -240,8 +368,12 @@ class DebitNoteService:
                 total=item['total'],
             )
 
-            # Restore stock
-            batch.qty_strips += int(qty)
+            # Reduce stock (goods are leaving the pharmacy to go back to the supplier)
+            qty_to_return = int(qty)
+            if batch.qty_strips < qty_to_return:
+                raise ValidationError(f"Cannot return {qty_to_return}. Only {batch.qty_strips} available.")
+            
+            batch.qty_strips -= qty_to_return
             batch.save(update_fields=['qty_strips'])
 
         # Reduce distributor outstanding if linked to invoice
@@ -256,6 +388,19 @@ class DebitNoteService:
                 inv.save(update_fields=['outstanding'])
             except PurchaseInvoice.DoesNotExist:
                 pass
+
+        # Post the specific Debit Note amount to the ledger
+        try:
+            from apps.accounts.journal_service import post_debit_note
+            post_debit_note(note)
+            
+            # Update the status so the UI knows it's fully processed!
+            note.status = 'Completed'  # Note: If your system uses 'Approved' or 'Settled', use that instead
+            note.save(update_fields=['status'])
+            
+        except Exception as e:
+            logger.error(f"Journal posting failed for debit note {note.id}: {e}")
+            raise ValidationError(f"Accounting failure: {e}")
 
         return note
 
@@ -326,13 +471,15 @@ class CreditNoteService:
             except Customer.DoesNotExist:
                 pass
 
-        # Mark original invoice as having a return
+        # has_return is now a computed property on SaleInvoice (C10) — no DB write needed
+
+        # Reverse journal entries from the original sale (if linked)
         if data.get('sale_invoice_id'):
             try:
-                inv = SaleInvoice.objects.get(id=data['sale_invoice_id'])
-                inv.has_return = True
-                inv.save(update_fields=['has_return'])
-            except SaleInvoice.DoesNotExist:
-                pass
+                from apps.accounts.journal_service import reverse_journal
+                reverse_journal('SALE', data['sale_invoice_id'], outlet_id, 'CREDIT NOTE REVERSAL OF')
+            except Exception as e:
+                logger.error(f"Journal reversal failed for credit note {note.id}: {e}")
+                # Don't re-raise for reversals - note was created successfully
 
         return note

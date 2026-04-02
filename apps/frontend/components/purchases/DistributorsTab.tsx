@@ -1,10 +1,11 @@
 'use client';
 
 import { useState } from 'react';
+import { format } from 'date-fns';
 import {
     Plus, Edit2, Building2, Phone, Mail, MapPin,
     FileText, CreditCard, CheckCircle2, AlertCircle,
-    X, Save, ChevronDown, BookOpen,
+    X, Save, ChevronDown, BookOpen, History,
 } from 'lucide-react';
 import { LedgerDrawer } from '@/components/accounts/LedgerDrawer';
 import { Button } from '@/components/ui/button';
@@ -13,12 +14,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { useDistributors, useCreateDistributor, useUpdateDistributor } from '@/hooks/usePurchases';
+import { useDistributors, useCreateDistributor, useUpdateDistributor, useDistributorHistory } from '@/hooks/usePurchases';
 import { useAuthStore } from '@/store/authStore';
 import { Distributor, INDIAN_STATES } from '@/types';
 import { cn } from '@/lib/utils';
+import { getPurchaseStatus, STATUS_CONFIG } from '@/lib/purchaseUtils';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,6 +54,7 @@ const defaultForm = (): FormState => ({
     name: '',
     gstin: '',
     drugLicenseNo: '',
+    foodLicenseNo: '',
     phone: '',
     email: '',
     address: '',
@@ -138,6 +143,14 @@ function DistributorForm({
                                 placeholder="MH/DL/…"
                             />
                         </div>
+                    </div>
+                    <div className="space-y-1.5">
+                        <Label className="text-sm">Food License No</Label>
+                        <Input
+                            value={form.foodLicenseNo ?? ''}
+                            onChange={(e) => set('foodLicenseNo', e.target.value)}
+                            placeholder="FSSAI/…"
+                        />
                     </div>
                 </div>
 
@@ -310,6 +323,7 @@ function DistributorCard({
     onCancel,
     isSaving,
     onViewLedger,
+    onViewHistory,
 }: {
     distributor: Distributor;
     isEditing: boolean;
@@ -318,8 +332,9 @@ function DistributorCard({
     onCancel: () => void;
     isSaving: boolean;
     onViewLedger: () => void;
+    onViewHistory: () => void;
 }) {
-    const outstanding = d.openingBalance ?? 0;
+    const outstanding = d.currentBalance ?? d.openingBalance ?? 0;
     const cleared     = outstanding <= 0;
     const color       = avatarColor(d.name);
 
@@ -358,6 +373,15 @@ function DistributorCard({
                         </div>
                     </div>
                     <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={onViewHistory}
+                            title="Invoice History"
+                        >
+                            <History className="h-3.5 w-3.5" />
+                        </Button>
                         <Button
                             variant="ghost"
                             size="sm"
@@ -407,6 +431,12 @@ function DistributorCard({
                             <span className="truncate font-mono">DL: {d.drugLicenseNo}</span>
                         </div>
                     )}
+                    {d.foodLicenseNo && (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <FileText className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate font-mono">FL: {d.foodLicenseNo}</span>
+                        </div>
+                    )}
                     {d.creditDays != null && (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <CreditCard className="h-3.5 w-3.5 shrink-0" />
@@ -452,6 +482,10 @@ export function DistributorsTab() {
         distributorName: string;
     }>({ open: false, distributorId: '', distributorName: '' });
 
+    const [historyFor, setHistoryFor] = useState<Distributor | null>(null);
+    const [historyPage, setHistoryPage] = useState(1);
+    const { data: historyData, isLoading: historyLoading } = useDistributorHistory(historyFor?.id ?? null);
+
     const isSaving = createDist.isPending || updateDist.isPending;
 
     const handleCreate = async (form: FormState) => {
@@ -483,7 +517,7 @@ export function DistributorsTab() {
     };
 
     const totalOutstanding = (distributors ?? []).reduce(
-        (sum, d) => sum + (d.openingBalance ?? 0), 0,
+        (sum, d) => sum + (d.currentBalance ?? d.openingBalance ?? 0), 0,
     );
 
     return (
@@ -578,6 +612,7 @@ export function DistributorsTab() {
                             onCancel={() => setActiveForm(null)}
                             isSaving={isSaving}
                             onViewLedger={() => setLedgerState({ open: true, distributorId: d.id, distributorName: d.name })}
+                            onViewHistory={() => { setHistoryFor(d); setHistoryPage(1); }}
                         />
                     ))}
                 </div>
@@ -591,6 +626,126 @@ export function DistributorsTab() {
                 open={ledgerState.open}
                 onClose={() => setLedgerState((s) => ({ ...s, open: false }))}
             />
+
+            {/* Invoice History Sheet */}
+            <Sheet open={!!historyFor} onOpenChange={(open) => !open && setHistoryFor(null)}>
+                <SheetContent className="w-full sm:max-w-3xl overflow-y-auto">
+                    <SheetHeader className="pb-4 border-b">
+                        <SheetTitle className="flex flex-col gap-0.5">
+                            <span>{historyFor?.name}</span>
+                            {historyFor?.gstin && (
+                                <span className="font-mono text-xs font-normal text-muted-foreground">
+                                    {historyFor.gstin}
+                                </span>
+                            )}
+                        </SheetTitle>
+                    </SheetHeader>
+
+                    {/* Summary Cards */}
+                    {historyData && (
+                        <div className="grid grid-cols-3 gap-3 mt-4">
+                            <div className="rounded-lg border bg-slate-50 p-3">
+                                <p className="text-xs text-muted-foreground">Total Invoices</p>
+                                <p className="text-xl font-bold">{historyData.pagination.totalRecords}</p>
+                            </div>
+                            <div className="rounded-lg border bg-slate-50 p-3">
+                                <p className="text-xs text-muted-foreground">Total Purchased</p>
+                                <p className="text-xl font-bold">
+                                    {formatINR(historyData.data.reduce((s, i) => s + i.grandTotal, 0))}
+                                </p>
+                            </div>
+                            <div className="rounded-lg border bg-red-50 p-3">
+                                <p className="text-xs text-muted-foreground">Outstanding</p>
+                                <p className="text-xl font-bold text-red-600">
+                                    {formatINR(historyData.data.reduce((s, i) => s + i.outstanding, 0))}
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Table */}
+                    <div className="mt-4">
+                        {historyLoading ? (
+                            <div className="space-y-2">
+                                {[...Array(5)].map((_, i) => (
+                                    <Skeleton key={i} className="h-10 w-full" />
+                                ))}
+                            </div>
+                        ) : !historyData?.data.length ? (
+                            <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+                                <FileText className="h-10 w-10 mb-3 opacity-30" />
+                                <p className="font-medium">No invoices found</p>
+                            </div>
+                        ) : (
+                            <>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Date</TableHead>
+                                            <TableHead>Invoice No</TableHead>
+                                            <TableHead className="text-right">Items</TableHead>
+                                            <TableHead className="text-right">Grand Total</TableHead>
+                                            <TableHead className="text-right">Outstanding</TableHead>
+                                            <TableHead>Status</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {historyData.data
+                                            .slice((historyPage - 1) * 10, historyPage * 10)
+                                            .map((inv) => {
+                                                const status = getPurchaseStatus(inv);
+                                                const cfg = STATUS_CONFIG[status];
+                                                return (
+                                                    <TableRow key={inv.id}>
+                                                        <TableCell className="text-sm">
+                                                            {format(new Date(inv.invoiceDate), 'dd MMM yyyy')}
+                                                        </TableCell>
+                                                        <TableCell className="font-mono text-xs">
+                                                            {inv.invoiceNo}
+                                                        </TableCell>
+                                                        <TableCell className="text-right text-sm">
+                                                            {inv.items?.length ?? '—'}
+                                                        </TableCell>
+                                                        <TableCell className="text-right text-sm font-medium">
+                                                            {formatINR(inv.grandTotal)}
+                                                        </TableCell>
+                                                        <TableCell className={cn(
+                                                            'text-right text-sm font-medium',
+                                                            inv.outstanding > 0 ? 'text-red-600' : '',
+                                                        )}>
+                                                            {formatINR(inv.outstanding)}
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <span className={cn(
+                                                                'inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium',
+                                                                cfg.classes,
+                                                            )}>
+                                                                {cfg.label}
+                                                            </span>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                    </TableBody>
+                                </Table>
+
+                                {historyData.data.length > 10 && (
+                                    <div className="mt-4 flex justify-center">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={historyPage * 10 >= historyData.data.length}
+                                            onClick={() => setHistoryPage((p) => p + 1)}
+                                        >
+                                            Load More
+                                        </Button>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </SheetContent>
+            </Sheet>
 
         </div>
     );

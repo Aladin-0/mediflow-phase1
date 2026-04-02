@@ -1,6 +1,6 @@
 'use client';
 
-import { Heart, Eye, Receipt, IndianRupee } from 'lucide-react';
+import { Heart, Eye, Receipt, IndianRupee, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCustomerList } from '@/hooks/useCustomers';
@@ -13,9 +13,10 @@ import { CustomerFilters, CustomerFull } from '@/types';
 
 interface CustomerTableProps {
     filters: CustomerFilters;
+    onEdit?: (customer: CustomerFull) => void;
 }
 
-export default function CustomerTable({ filters }: CustomerTableProps) {
+export default function CustomerTable({ filters, onEdit }: CustomerTableProps) {
     const { data, isLoading } = useCustomerList(filters);
     const setCustomer = useBillingStore((s) => s.setCustomer);
     const router = useRouter();
@@ -102,6 +103,12 @@ export default function CustomerTable({ filters }: CustomerTableProps) {
                                         onClick={() => router.push(`/dashboard/customers/${c.id}`)}>
                                         <Eye className="w-3 h-3" />
                                     </Button>
+                                    {onEdit && (
+                                        <Button variant="ghost" size="sm" className="h-7 text-xs px-2"
+                                            onClick={() => onEdit(c)}>
+                                            <Pencil className="w-3 h-3" />
+                                        </Button>
+                                    )}
                                     <Button variant="outline" size="sm" className="h-7 text-xs px-2"
                                         onClick={() => { setCustomer(c); router.push('/dashboard/billing'); }}>
                                         <Receipt className="w-3 h-3" />

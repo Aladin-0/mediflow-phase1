@@ -129,6 +129,7 @@ class Customer(models.Model):
     class Meta:
         db_table = 'accounts_customer'
         ordering = ['-created_at']
+        unique_together = [('outlet', 'phone')]
         indexes = [
             models.Index(fields=['outlet', 'is_active']),
             models.Index(fields=['phone', 'outlet']),
@@ -275,6 +276,72 @@ class Ledger(models.Model):
     is_system = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Contact
+    station = models.CharField(max_length=100, blank=True)
+    mail_to = models.CharField(max_length=255, blank=True)
+    contact_person = models.CharField(max_length=255, blank=True)
+    designation = models.CharField(max_length=100, blank=True)
+    phone_office = models.CharField(max_length=15, blank=True)
+    phone_residence = models.CharField(max_length=15, blank=True)
+    fax_no = models.CharField(max_length=15, blank=True)
+    website = models.CharField(max_length=255, blank=True)
+    email = models.EmailField(blank=True)
+    pincode = models.CharField(max_length=10, blank=True)
+
+    # Compliance
+    freeze_upto = models.DateField(null=True, blank=True)
+    dl_no = models.CharField(max_length=50, blank=True)
+    dl_expiry = models.DateField(null=True, blank=True)
+    vat_no = models.CharField(max_length=50, blank=True)
+    vat_expiry = models.DateField(null=True, blank=True)
+    st_no = models.CharField(max_length=50, blank=True)
+    st_expiry = models.DateField(null=True, blank=True)
+    food_licence_no = models.CharField(max_length=50, blank=True)
+    food_licence_expiry = models.DateField(null=True, blank=True)
+    extra_heading_no = models.CharField(max_length=50, blank=True)
+    extra_heading_expiry = models.DateField(null=True, blank=True)
+    pan_no = models.CharField(max_length=10, blank=True)
+    it_pan_no = models.CharField(max_length=10, blank=True)
+
+    # GST / Tax
+    gst_heading = models.CharField(
+        max_length=20,
+        choices=[('local', 'Local'), ('central', 'Central'), ('exempt', 'Exempt')],
+        default='local',
+    )
+    bill_export = models.CharField(
+        max_length=20,
+        choices=[('gstn', 'GSTN'), ('non_gstn', 'Non-GSTN')],
+        default='gstn',
+    )
+    ledger_type = models.CharField(
+        max_length=30,
+        choices=[
+            ('registered', 'Registered'),
+            ('unregistered', 'Unregistered'),
+            ('composition', 'Composition'),
+            ('consumer', 'Consumer'),
+        ],
+        default='registered',
+    )
+
+    # Settings
+    balancing_method = models.CharField(
+        max_length=20,
+        choices=[('bill_by_bill', 'Bill by Bill'), ('on_account', 'On Account')],
+        default='bill_by_bill',
+    )
+    ledger_category = models.CharField(max_length=50, default='OTHERS')
+    state = models.CharField(max_length=50, blank=True)
+    country = models.CharField(max_length=50, default='India')
+    color = models.CharField(
+        max_length=20,
+        choices=[('normal', 'Normal'), ('red', 'Red'), ('green', 'Green'), ('blue', 'Blue')],
+        default='normal',
+    )
+    is_hidden = models.BooleanField(default=False)
+    retailio_id = models.CharField(max_length=100, blank=True)
+
     objects = OutletFilteredManager()
 
     class Meta:
@@ -331,6 +398,33 @@ class VoucherLine(models.Model):
 
     def __str__(self):
         return f"Dr:{self.debit} Cr:{self.credit}"
+
+
+class VoucherBillAdjustment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4)
+    voucher = models.ForeignKey(
+        'Voucher', related_name='bill_adjustments', on_delete=models.CASCADE
+    )
+    invoice_type = models.CharField(
+        max_length=20,
+        choices=[('sale', 'Sale Invoice'), ('purchase', 'Purchase Invoice')],
+    )
+    sale_invoice = models.ForeignKey(
+        'billing.SaleInvoice', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='bill_adjustments',
+    )
+    purchase_invoice = models.ForeignKey(
+        'purchases.PurchaseInvoice', null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='bill_adjustments',
+    )
+    adjusted_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'accounts_voucherbilladjustment'
+
+    def __str__(self):
+        return f"Adj ₹{self.adjusted_amount} on {self.invoice_type}"
 
 
 class DebitNote(models.Model):
@@ -423,3 +517,69 @@ class CreditNoteItem(models.Model):
 
     class Meta:
         db_table = 'accounts_creditnoteitem'
+
+
+class JournalEntry(models.Model):
+    """
+    Double-entry journal entry created automatically when transactions (sales, purchases, vouchers) are saved.
+    Provides audit trail and enforces double-entry accounting (total debits = total credits).
+    """
+    SOURCE_TYPES = [
+        ('SALE', 'Sale Invoice'),
+        ('PURCHASE', 'Purchase Invoice'),
+        ('VOUCHER', 'Voucher'),
+        ('RETURN', 'Return / Reversal'),
+        ('CREDIT_PAYMENT', 'Credit Payment Collection'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    outlet = models.ForeignKey('core.Outlet', on_delete=models.CASCADE, related_name='journal_entries')
+    source_type = models.CharField(max_length=20, choices=SOURCE_TYPES)
+    source_id = models.UUIDField(help_text='ID of the SaleInvoice, PurchaseInvoice, Voucher, or source return')
+    date = models.DateField(help_text='Transaction date')
+    narration = models.TextField(blank=True, help_text='Transaction description')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = OutletFilteredManager()
+
+    class Meta:
+        db_table = 'accounts_journalentry'
+        unique_together = ['outlet', 'source_type', 'source_id']
+        indexes = [
+            models.Index(fields=['outlet', 'source_type', 'source_id']),
+            models.Index(fields=['outlet', 'date']),
+        ]
+
+    def __str__(self):
+        return f"{self.source_type} {self.source_id} on {self.date}"
+
+
+class JournalLine(models.Model):
+    """
+    Individual debit/credit line in a journal entry.
+    Each line updates a single ledger account.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    journal_entry = models.ForeignKey(JournalEntry, on_delete=models.CASCADE, related_name='lines')
+    ledger = models.ForeignKey(Ledger, on_delete=models.PROTECT, related_name='journal_lines')
+    debit_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text='Amount debited to this ledger (if any)'
+    )
+    credit_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        help_text='Amount credited to this ledger (if any)'
+    )
+
+    class Meta:
+        db_table = 'accounts_journalline'
+
+    def __str__(self):
+        if self.debit_amount > 0:
+            return f"Dr {self.ledger.name} ₹{self.debit_amount}"
+        else:
+            return f"Cr {self.ledger.name} ₹{self.credit_amount}"

@@ -1,9 +1,11 @@
 import { Skeleton } from '@/components/ui/skeleton';
 
+const SKELETON_HEIGHTS = ['45%', '65%', '55%', '70%', '50%', '60%', '52%', '68%', '48%', '72%', '58%', '62%'];
+
 export function DashboardSkeleton() {
   return (
     <div className="space-y-6 max-w-[1400px]">
-      
+
       {/* Header Area */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
         <div>
@@ -34,7 +36,7 @@ export function DashboardSkeleton() {
           <Skeleton className="h-4 w-48 mb-6" />
           <div className="flex-1 flex items-end gap-2">
             {[...Array(12)].map((_, i) => (
-              <Skeleton key={i} className="flex-1 bg-slate-100 rounded-t-sm" style={{ height: `${Math.max(20, Math.random() * 100)}%` }} />
+              <Skeleton key={i} className="flex-1 bg-slate-100 rounded-t-sm" style={{ height: SKELETON_HEIGHTS[i % SKELETON_HEIGHTS.length] }} />
             ))}
           </div>
         </div>

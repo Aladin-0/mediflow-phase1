@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { 
-    Receipt, Loader2, Banknote, Smartphone, 
-    CreditCard, BookOpen, GitMerge, AlertCircle
+import {
+    Receipt, Loader2, Banknote, Smartphone,
+    CreditCard, BookOpen, AlertCircle
 } from 'lucide-react';
 import { 
     Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription 
@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
-import { BillTotals, PaymentSplit, Customer } from '@/types';
+import { BillTotals, PaymentSplit, Ledger } from '@/types';
 import { useBillingStore } from '@/store/billingStore';
 
 interface PaymentModalProps {
@@ -23,12 +23,12 @@ interface PaymentModalProps {
     onConfirm: (payment: PaymentSplit) => void;
     totals: BillTotals;
     isLoading: boolean;
-    customer?: Customer | null;
+    customerLedger?: Ledger | null;
 }
 
-type TabType = 'cash' | 'upi' | 'card' | 'credit' | 'split';
+type TabType = 'cash' | 'upi' | 'card' | 'credit' | 'ledger';
 
-export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, customer }: PaymentModalProps) {
+export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, customerLedger }: PaymentModalProps) {
     const { grandTotal } = totals;
     const [activeTab, setActiveTab] = useState<TabType>('cash');
 
@@ -38,7 +38,6 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
 
     // === UPI STATE ===
     const [upiRef, setUpiRef] = useState('');
-    const [upiConfirmed, setUpiConfirmed] = useState(false);
 
     // === CARD STATE ===
     const [cardLast4, setCardLast4] = useState('');
@@ -48,26 +47,15 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
     const [creditGiven, setCreditGiven] = useState<number>(grandTotal);
     const [sendReminder, setSendReminder] = useState(true);
 
-    // === SPLIT STATE ===
-    const [splitCash, setSplitCash] = useState(0);
-    const [splitUpi, setSplitUpi] = useState(0);
-    const [splitCard, setSplitCard] = useState(0);
-    const [splitCredit, setSplitCredit] = useState(0);
-
-    const splitTotal = splitCash + splitUpi + splitCard + splitCredit;
-    const splitDiff = splitTotal - grandTotal;
-    const isSplitBalanced = Math.abs(splitDiff) < 0.01; // Floating point safe
+    // === LEDGER STATE ===
+    const [ledgerNote, setLedgerNote] = useState('');
 
     // Reset when opened
     useEffect(() => {
         if (isOpen) {
             setCashTendered(Math.ceil(grandTotal));
-            setUpiConfirmed(false);
             setCreditGiven(grandTotal);
-            setSplitCash(0);
-            setSplitUpi(0);
-            setSplitCard(0);
-            setSplitCredit(0);
+            setLedgerNote('');
             setActiveTab('cash');
         }
     }, [isOpen, grandTotal]);
@@ -75,8 +63,8 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
     // Handle Confirm
     const handleConfirm = () => {
         const payment: PaymentSplit = {
-            method: activeTab === 'split' ? 'split' : activeTab,
-            amount: grandTotal, 
+            method: activeTab,
+            amount: grandTotal,
             cashTendered: 0,
             cashReturned: 0,
             upiRef: '',
@@ -96,26 +84,25 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
             payment.cardType = cardType;
         } else if (activeTab === 'credit') {
             payment.creditGiven = creditGiven;
-        } else if (activeTab === 'split') {
-            payment.splitBreakdown = {
-                cash: splitCash,
-                upi: splitUpi,
-                card: splitCard,
-                credit: splitCredit
-            };
-            payment.cashTendered = splitCash;
-            payment.creditGiven = splitCredit;
+        } else if (activeTab === 'ledger') {
+            payment.creditGiven = grandTotal;
+            payment.ledgerNote = ledgerNote;
+            payment.ledgerCustomerId = customerLedger?.id ?? null;
         }
 
         onConfirm(payment);
     };
 
     // Disabled Logic
+    const totalEntered =
+        activeTab === 'cash' ? cashTendered :
+        activeTab === 'credit' ? creditGiven :
+        grandTotal; // upi / card / ledger always equal grandTotal
+
     let isConfirmDisabled = isLoading;
-    if (activeTab === 'cash' && cashTendered < grandTotal) isConfirmDisabled = true;
-    if (activeTab === 'upi' && !upiConfirmed) isConfirmDisabled = true;
-    if (activeTab === 'credit' && (!customer || creditGiven <= 0)) isConfirmDisabled = true;
-    if (activeTab === 'split' && !isSplitBalanced) isConfirmDisabled = true;
+    if (totalEntered < grandTotal - 0.01) isConfirmDisabled = true;
+    if (activeTab === 'credit' && (!customerLedger || creditGiven <= 0)) isConfirmDisabled = true;
+    if (activeTab === 'ledger' && !customerLedger) isConfirmDisabled = true;
 
     // Listen for Enter key
     useEffect(() => {
@@ -127,7 +114,7 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, isConfirmDisabled, activeTab, cashTendered, upiConfirmed, splitTotal]); // internal deps mapping
+    }, [isOpen, isConfirmDisabled, activeTab, cashTendered]);
 
     return (
         <Dialog open={isOpen} onOpenChange={(v) => !isLoading && !v && onClose()}>
@@ -148,12 +135,27 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
                 </DialogHeader>
 
                 <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabType)} className="w-full mt-4">
-                    <TabsList className="grid w-full grid-cols-5 bg-slate-100/50 p-1 mb-6 h-12">
-                        <TabsTrigger value="cash" className="data-[state=active]:bg-primary data-[state=active]:text-white h-full"><Banknote className="w-4 h-4" /></TabsTrigger>
-                        <TabsTrigger value="upi" className="data-[state=active]:bg-primary data-[state=active]:text-white h-full"><Smartphone className="w-4 h-4" /></TabsTrigger>
-                        <TabsTrigger value="card" className="data-[state=active]:bg-primary data-[state=active]:text-white h-full"><CreditCard className="w-4 h-4" /></TabsTrigger>
-                        <TabsTrigger value="credit" className="data-[state=active]:bg-primary data-[state=active]:text-white h-full"><BookOpen className="w-4 h-4" /></TabsTrigger>
-                        <TabsTrigger value="split" className="data-[state=active]:bg-primary data-[state=active]:text-white h-full"><GitMerge className="w-4 h-4" /></TabsTrigger>
+                    <TabsList className="grid w-full grid-cols-5 bg-slate-100/50 p-1 mb-6 h-auto">
+                        <TabsTrigger value="cash" className="data-[state=active]:bg-primary data-[state=active]:text-white flex flex-col items-center gap-0.5 py-2 h-full">
+                            <Banknote className="w-4 h-4" />
+                            <span className="text-[10px] font-medium leading-none">Cash</span>
+                        </TabsTrigger>
+                        <TabsTrigger value="upi" className="data-[state=active]:bg-primary data-[state=active]:text-white flex flex-col items-center gap-0.5 py-2 h-full">
+                            <Smartphone className="w-4 h-4" />
+                            <span className="text-[10px] font-medium leading-none">UPI</span>
+                        </TabsTrigger>
+                        <TabsTrigger value="card" className="data-[state=active]:bg-primary data-[state=active]:text-white flex flex-col items-center gap-0.5 py-2 h-full">
+                            <CreditCard className="w-4 h-4" />
+                            <span className="text-[10px] font-medium leading-none">Card</span>
+                        </TabsTrigger>
+                        <TabsTrigger value="credit" className="data-[state=active]:bg-primary data-[state=active]:text-white flex flex-col items-center gap-0.5 py-2 h-full">
+                            <BookOpen className="w-4 h-4" />
+                            <span className="text-[10px] font-medium leading-none">Credit</span>
+                        </TabsTrigger>
+                        <TabsTrigger value="ledger" className="data-[state=active]:bg-primary data-[state=active]:text-white flex flex-col items-center gap-0.5 py-2 h-full">
+                            <BookOpen className="w-4 h-4" />
+                            <span className="text-[10px] font-medium leading-none">Ledger</span>
+                        </TabsTrigger>
                     </TabsList>
 
                     {/* --- CASH TAB --- */}
@@ -217,14 +219,6 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
                                 onChange={e => setUpiRef(e.target.value)}
                             />
                         </div>
-
-                        <div className="flex items-center justify-between p-4 border rounded-xl bg-slate-50/50 hover:bg-slate-50 transition-colors">
-                            <div>
-                                <h4 className="font-medium text-sm text-slate-900">Payment received</h4>
-                                <p className="text-xs text-slate-500 mt-0.5">Confirm customer has paid via app</p>
-                            </div>
-                            <Switch data-testid="payment-upi-toggle" checked={upiConfirmed} onCheckedChange={setUpiConfirmed} />
-                        </div>
                     </TabsContent>
 
                     {/* --- CARD TAB --- */}
@@ -263,32 +257,31 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
 
                     {/* --- CREDIT TAB --- */}
                     <TabsContent value="credit" className="space-y-4 outline-none">
-                        {!customer ? (
+                        {!customerLedger ? (
                             <div className="text-center py-6">
                                 <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-3" />
-                                <h3 className="text-sm font-medium text-slate-900 mb-1">No Customer Selected</h3>
+                                <h3 className="text-sm font-medium text-slate-900 mb-1">No Party Selected</h3>
                                 <p className="text-xs text-muted-foreground mb-4 max-w-[200px] mx-auto">
-                                    Please select a customer to record credit/udhari.
+                                    Please select a customer ledger (Sundry Debtor) to record credit/udhari.
                                 </p>
-                                <Button variant="outline" onClick={onClose}>Close & Select Customer</Button>
+                                <Button variant="outline" onClick={onClose}>Close & Select Party</Button>
                             </div>
                         ) : (
                             <>
                                 <div className="border border-slate-200 rounded-xl p-4 bg-slate-50">
                                     <div className="flex justify-between items-start mb-2">
                                         <div>
-                                            <p className="font-medium text-slate-900">{customer.name}</p>
-                                            <p className="text-xs text-slate-500">{customer.phone}</p>
+                                            <p className="font-medium text-slate-900">{customerLedger.name}</p>
+                                            <p className="text-xs text-slate-500">{customerLedger.groupName}</p>
+                                            {customerLedger.phone && (
+                                                <p className="text-xs text-slate-400">{customerLedger.phone}</p>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex gap-4 mt-3 text-sm">
                                         <div>
                                             <p className="text-xs text-slate-500">Outstanding</p>
-                                            <p className="font-semibold text-amber-600">₹{customer.outstanding?.toFixed(2) || '0.00'}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-xs text-slate-500">Limit</p>
-                                            <p className="font-medium text-slate-700">₹{customer.creditLimit?.toFixed(2) || '0.00'}</p>
+                                            <p className="font-semibold text-amber-600">₹{customerLedger.currentBalance?.toFixed(2) || '0.00'}</p>
                                         </div>
                                     </div>
                                 </div>
@@ -297,21 +290,14 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
                                     <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">New Credit Amount</label>
                                     <div className="relative">
                                         <span className="absolute left-3 top-1/2 -translate-y-1/2 font-medium text-slate-500">₹</span>
-                                        <Input 
-                                            type="number" 
-                                            className="pl-7" 
+                                        <Input
+                                            type="number"
+                                            className="pl-7"
                                             value={creditGiven || ''}
                                             onChange={(e) => setCreditGiven(Number(e.target.value))}
                                         />
                                     </div>
                                 </div>
-
-                                {customer.creditLimit && ((customer.outstanding || 0) + creditGiven > customer.creditLimit) && (
-                                    <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-xs flex items-start gap-2">
-                                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                                        <span>Exceeds credit limit by ₹{((customer.outstanding || 0) + creditGiven - customer.creditLimit).toFixed(2)}. Override requires manager approval.</span>
-                                    </div>
-                                )}
 
                                 <div className="flex items-center justify-between mt-4">
                                     <label className="text-sm cursor-pointer select-none font-medium">Send WhatsApp Reminder</label>
@@ -321,54 +307,38 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
                         )}
                     </TabsContent>
 
-                    {/* --- SPLIT TAB --- */}
-                    <TabsContent value="split" className="space-y-4 outline-none">
-                        <div className="space-y-3">
-                            {[
-                                { label: 'Cash', icon: Banknote, val: splitCash, set: setSplitCash },
-                                { label: 'UPI', icon: Smartphone, val: splitUpi, set: setSplitUpi },
-                                { label: 'Card', icon: CreditCard, val: splitCard, set: setSplitCard },
-                                { label: 'Credit', icon: BookOpen, val: splitCredit, set: setSplitCredit, hidden: !customer },
-                            ].map((mode) => !mode.hidden && (
-                                <div key={mode.label} className="flex items-center gap-3">
-                                    <div className="w-24 flex items-center gap-2 text-sm text-slate-600 font-medium">
-                                        <mode.icon className="w-4 h-4" /> {mode.label}
-                                    </div>
-                                    <div className="relative flex-1">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">₹</span>
-                                        <Input 
-                                            type="number" 
-                                            className="pl-7 h-9 text-right" 
-                                            value={mode.val || ''}
-                                            onChange={e => mode.set(Number(e.target.value))}
-                                        />
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-
-                        <div className="pt-2 border-t mt-4 flex items-center justify-between">
-                            <Button 
-                                variant="outline" 
-                                size="sm" 
-                                className="text-xs"
-                                onClick={() => {
-                                    const rem = Math.max(0, grandTotal - splitUpi - splitCard - splitCredit);
-                                    setSplitCash(Number(rem.toFixed(2)));
-                                }}
-                            >
-                                Fill Cash
-                            </Button>
-                            
-                            <div className="text-right">
-                                {isSplitBalanced ? (
-                                    <span className="text-green-600 font-semibold text-sm">✓ Balanced</span>
-                                ) : splitDiff < 0 ? (
-                                    <span className="text-amber-500 font-medium text-sm">Remaining: ₹{Math.abs(splitDiff).toFixed(2)}</span>
-                                ) : (
-                                    <span className="text-red-500 font-medium text-sm">Over by: ₹{splitDiff.toFixed(2)}</span>
-                                )}
+                    {/* --- LEDGER TAB --- */}
+                    <TabsContent value="ledger" className="space-y-4 outline-none">
+                        <div className="mt-3 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <div className="text-xs font-medium text-slate-600 uppercase tracking-wide">
+                                Add to Customer Ledger
                             </div>
+
+                            <div className="text-xs text-slate-500">
+                                Party: <span className="font-medium text-slate-800">
+                                    {customerLedger?.name ?? 'Walk-in'}
+                                </span>
+                            </div>
+
+                            {customerLedger && (customerLedger.currentBalance ?? 0) > 0 && (
+                                <div className="text-xs text-orange-600">
+                                    Current outstanding: ₹{(customerLedger.currentBalance ?? 0).toLocaleString('en-IN')}
+                                </div>
+                            )}
+
+                            <div className="text-xs text-slate-500">
+                                Amount being added to ledger:
+                                <span className="font-mono font-semibold text-slate-800 ml-1">
+                                    ₹{grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </span>
+                            </div>
+
+                            <input
+                                className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                                placeholder="Note (optional)"
+                                value={ledgerNote}
+                                onChange={(e) => setLedgerNote(e.target.value)}
+                            />
                         </div>
                     </TabsContent>
                 </Tabs>
@@ -382,8 +352,14 @@ export function PaymentModal({ isOpen, onClose, onConfirm, totals, isLoading, cu
                         </div>
                         {totals.discountAmount > 0 && (
                             <div className="flex justify-between text-green-600">
-                                <span>Discount</span>
+                                <span>Item Discount</span>
                                 <span>-₹{totals.discountAmount.toFixed(2)}</span>
+                            </div>
+                        )}
+                        {totals.extraDiscountAmount > 0 && (
+                            <div className="flex justify-between text-green-600">
+                                <span>Extra Discount</span>
+                                <span>-₹{totals.extraDiscountAmount.toFixed(2)}</span>
                             </div>
                         )}
                         <div className="flex justify-between">

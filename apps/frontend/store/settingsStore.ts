@@ -4,6 +4,7 @@ import type {
     OutletSettings, GSTSettings, PrinterSettings, BillingSettings,
     AttendanceSettings, NotificationSettings, AppPreferences,
 } from '../types';
+import { STATE_CODES } from '@mediflow/constants';
 
 const DEFAULT_OUTLET: OutletSettings = {
     outletName: '',
@@ -30,7 +31,7 @@ const DEFAULT_GST: GSTSettings = {
 };
 
 const DEFAULT_PRINTER: PrinterSettings = {
-    printerType: 'thermal',
+    printerType: 'a4',
     thermalWidth: '80mm',
     autoPrintAfterBill: false,
     printCopies: 1,
@@ -150,7 +151,15 @@ export const useSettingsStore = create<SettingsState>()(
             setAttendanceGraceMinutes: (v) => set({ attendanceGraceMinutes: v }),
 
             // ── Grouped actions ───────────────────────────────────────
-            updateOutletSettings: (data) => set(data),
+            updateOutletSettings: (data) => {
+                // M9: whenever outletState changes, re-derive outletStateCode
+                // so the two values never drift out of sync.
+                const extra: Partial<SettingsState> = {};
+                if (data.outletState !== undefined) {
+                    extra.outletStateCode = STATE_CODES[data.outletState] ?? '';
+                }
+                set({ ...data, ...extra });
+            },
             updateGSTSettings: (data) => set(data),
             updatePrinterSettings: (data) => set(data),
             updateBillingSettings: (data) => set(data),
@@ -179,7 +188,7 @@ export const useSettingsStore = create<SettingsState>()(
         {
             name: 'mediflow-settings',
             skipHydration: true,
-            version: 2,
+            version: 3,
             migrate: (state: any, v: number) => {
                 if (v < 2) {
                     if (state.printerType === 'thermal_80mm') {
@@ -189,6 +198,13 @@ export const useSettingsStore = create<SettingsState>()(
                     if (state.printerType === 'thermal_57mm') {
                         state.printerType = 'thermal'
                         state.thermalWidth = '58mm'
+                    }
+                }
+                if (v < 3) {
+                    // M9: re-derive outletStateCode from outletState to fix
+                    // any persisted data where the two values drifted apart.
+                    if (state.outletState) {
+                        state.outletStateCode = STATE_CODES[state.outletState] ?? state.outletStateCode ?? '27'
                     }
                 }
                 return state

@@ -5,6 +5,10 @@ from apps.accounts.voucher_views import (
     LedgerDetailView,
     LedgerStatementView,
     LedgerSyncView,
+    LedgerOutstandingView,
+    LedgerPendingBillsView,
+    TrialBalanceView,
+    GSTSummaryView,
     VoucherNextNoView,
     VoucherListView,
     VoucherDetailView,
@@ -22,6 +26,8 @@ urlpatterns = [
     path('ledgers/next-no/', VoucherNextNoView.as_view(), name='voucher-next-no'),
     path('ledgers/<uuid:ledger_id>/', LedgerDetailView.as_view(), name='ledger-detail'),
     path('ledgers/<uuid:ledger_id>/statement/', LedgerStatementView.as_view(), name='ledger-statement'),
+    path('ledgers/<uuid:ledger_id>/outstanding/', LedgerOutstandingView.as_view(), name='ledger-outstanding'),
+    path('ledgers/<uuid:ledger_id>/pending-bills/', LedgerPendingBillsView.as_view(), name='ledger-pending-bills'),
 
     # Vouchers
     path('vouchers/', VoucherListView.as_view(), name='voucher-list'),
@@ -32,4 +38,8 @@ urlpatterns = [
 
     # Credit Notes (Sale Returns)
     path('credit-notes/', CreditNoteListView.as_view(), name='credit-note-list'),
+
+    # Accounting Reports
+    path('trial-balance/', TrialBalanceView.as_view(), name='trial-balance'),
+    path('gst-summary/', GSTSummaryView.as_view(), name='gst-summary'),
 ]

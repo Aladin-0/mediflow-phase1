@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ShieldAlert, ImagePlus, X } from 'lucide-react';
+import { ShieldAlert, ImagePlus, X, Search, Stethoscope, Plus, Loader2 } from 'lucide-react';
 import { scheduleHSchema, type ScheduleHData } from '@/lib/validations/billing';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +24,11 @@ import {
     FormLabel,
     FormMessage,
 } from '@/components/ui/form';
+import { useDoctorSearch, useCreateDoctor, useCustomerList } from '@/hooks/useCustomers';
+import { useDebounce } from '@/hooks/useDebounce';
+import { useBillingStore } from '@/store/billingStore';
+import { useToast } from '@/hooks/use-toast';
+import { Doctor } from '@/types';
 
 interface ScheduleHModalProps {
     isOpen: boolean;
@@ -34,6 +39,27 @@ interface ScheduleHModalProps {
 
 export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: ScheduleHModalProps) {
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+    // ── Patient search state ─────────────────────────────────────────────────
+    const [patientQuery, setPatientQuery] = useState('');
+    const [showPatientResults, setShowPatientResults] = useState(false);
+    const debouncedPatientQuery = useDebounce(patientQuery, 300);
+    const { data: patientResults = [], isLoading: isPatientSearching } = useCustomerList(
+        debouncedPatientQuery.length >= 2 ? { search: debouncedPatientQuery } : undefined
+    );
+
+    // ── Doctor search state ──────────────────────────────────────────────────
+    const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
+    const [doctorQuery, setDoctorQuery] = useState('');
+    const [showCreateForm, setShowCreateForm] = useState(false);
+    const [newDoctorName, setNewDoctorName] = useState('');
+    const [newDoctorRegNo, setNewDoctorRegNo] = useState('');
+
+    const debouncedQuery = useDebounce(doctorQuery, 300);
+    const { data: doctorResults = [], isLoading: isDoctorSearching } = useDoctorSearch(debouncedQuery);
+    const createDoctorMutation = useCreateDoctor();
+    const { setDoctor } = useBillingStore();
+    const { toast } = useToast();
 
     const form = useForm<ScheduleHData>({
         resolver: zodResolver(scheduleHSchema) as any,
@@ -47,24 +73,53 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
         },
     });
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const url = URL.createObjectURL(file);
-            setPreviewUrl(url);
+    const handleDoctorSelect = (doctor: Doctor) => {
+        setSelectedDoctor(doctor);
+        setDoctor(doctor);
+        form.setValue('doctorName', doctor.name, { shouldValidate: true });
+        form.setValue('doctorRegNo', doctor.regNo || 'N/A', { shouldValidate: true });
+        setDoctorQuery('');
+    };
+
+    const handleDoctorClear = () => {
+        setSelectedDoctor(null);
+        setDoctor(null);
+        form.setValue('doctorName', '');
+        form.setValue('doctorRegNo', '');
+    };
+
+    const handleCreateDoctor = async () => {
+        if (!newDoctorName.trim() || !newDoctorRegNo.trim()) return;
+        try {
+            const doctor = await createDoctorMutation.mutateAsync({
+                name: newDoctorName.trim(),
+                registrationNo: newDoctorRegNo.trim(),
+            });
+            handleDoctorSelect(doctor);
+            setShowCreateForm(false);
+            setNewDoctorName('');
+            setNewDoctorRegNo('');
+            toast({ title: `${doctor.name} added` });
+        } catch {
+            toast({ variant: 'destructive', title: 'Failed to create doctor' });
         }
     };
 
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) setPreviewUrl(URL.createObjectURL(file));
+    };
+
     const handleRemoveFile = () => {
-        if (previewUrl) {
-            URL.revokeObjectURL(previewUrl);
-        }
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
         setPreviewUrl(null);
     };
 
     const handleFormSubmit = (data: ScheduleHData) => {
         onSubmit(data);
     };
+
+    const showSearchResults = debouncedQuery.length >= 2;
 
     return (
         <Dialog
@@ -87,8 +142,8 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                             <DialogTitle>Schedule Drug Details</DialogTitle>
                             <DialogDescription>
                                 {isMandatory
-                                    ? "Required for Schedule H1/X/Narcotic drugs"
-                                    : "Add for Schedule H compliance (recommended)"}
+                                    ? "Required for Schedule H1/X/C/Narcotic drugs"
+                                    : "Required for Schedule G/H drugs"}
                             </DialogDescription>
                         </div>
                     </div>
@@ -96,43 +151,184 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
 
                 <Form {...form}>
                     <form onSubmit={form.handleSubmit(handleFormSubmit)} className="space-y-6 mt-4">
-                        
+
+                        {/* Hidden RHF fields — set programmatically when doctor is selected */}
+                        <input type="hidden" {...form.register('doctorName')} />
+                        <input type="hidden" {...form.register('doctorRegNo')} />
+
                         {/* Doctor Details Section */}
-                        <div className="space-y-4">
+                        <div className="space-y-3">
                             <h3 className="text-sm font-semibold text-slate-900 border-b pb-2">Doctor Details</h3>
-                            <div className="grid grid-cols-2 gap-4">
-                                <FormField
-                                    control={form.control}
-                                    name="doctorName"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>Doctor Name *</FormLabel>
-                                            <FormControl>
-                                                <Input data-testid="sh-doctor-name" placeholder="Dr. Smith" {...field} />
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
+
+                            {selectedDoctor ? (
+                                /* Selected doctor badge */
+                                <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
+                                    <Stethoscope className="w-4 h-4 text-blue-600 shrink-0" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-semibold text-slate-800 leading-tight">{selectedDoctor.name}</p>
+                                        <p className="text-xs text-slate-500 mt-0.5">
+                                            {selectedDoctor.regNo && `Reg: ${selectedDoctor.regNo}`}
+                                            {selectedDoctor.qualification && ` • ${selectedDoctor.qualification}`}
+                                        </p>
+                                    </div>
+                                    <button type="button" onClick={handleDoctorClear} className="text-slate-400 hover:text-red-500 transition-colors p-0.5">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            ) : showCreateForm ? (
+                                /* Inline create form */
+                                <div className="space-y-3 border border-slate-200 rounded-lg p-4 bg-slate-50">
+                                    <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">New Doctor</p>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs font-medium text-slate-600 mb-1 block">Name *</label>
+                                            <Input
+                                                value={newDoctorName}
+                                                onChange={e => setNewDoctorName(e.target.value)}
+                                                placeholder="Dr. Name"
+                                                className="h-9 text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-medium text-slate-600 mb-1 block">Reg. No. *</label>
+                                            <Input
+                                                value={newDoctorRegNo}
+                                                onChange={e => setNewDoctorRegNo(e.target.value)}
+                                                placeholder="MH/12345"
+                                                className="h-9 text-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2 justify-end">
+                                        <Button type="button" variant="ghost" size="sm"
+                                            onClick={() => { setShowCreateForm(false); setNewDoctorName(''); setNewDoctorRegNo(''); }}>
+                                            Cancel
+                                        </Button>
+                                        <Button type="button" size="sm"
+                                            disabled={!newDoctorName.trim() || !newDoctorRegNo.trim() || createDoctorMutation.isPending}
+                                            onClick={handleCreateDoctor}>
+                                            {createDoctorMutation.isPending
+                                                ? <><Loader2 className="w-3 h-3 mr-1 animate-spin" />Saving…</>
+                                                : 'Save & Select'}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                /* Search input + results */
+                                <div className="space-y-1">
+                                    <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2.5 bg-white focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all">
+                                        <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                                        <input
+                                            value={doctorQuery}
+                                            onChange={e => setDoctorQuery(e.target.value)}
+                                            placeholder="Search doctor by name or reg no…"
+                                            className="flex-1 text-sm outline-none bg-transparent placeholder:text-slate-400"
+                                            autoComplete="off"
+                                        />
+                                        {doctorQuery && (
+                                            <button type="button" onClick={() => setDoctorQuery('')} className="text-slate-400 hover:text-slate-600">
+                                                <X className="w-3.5 h-3.5" />
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {showSearchResults && (
+                                        <div className="border border-slate-200 rounded-lg bg-white divide-y max-h-44 overflow-y-auto shadow-sm">
+                                            {isDoctorSearching ? (
+                                                <div className="flex items-center gap-2 px-3 py-2.5 text-sm text-slate-500">
+                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                    Searching…
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    {doctorResults.map((doc: Doctor) => (
+                                                        <button key={doc.id} type="button"
+                                                            onClick={() => handleDoctorSelect(doc)}
+                                                            className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 text-left transition-colors">
+                                                            <Stethoscope className="w-4 h-4 text-slate-400 shrink-0" />
+                                                            <div className="flex-1 min-w-0">
+                                                                <p className="text-sm font-medium text-slate-800 truncate">{doc.name}</p>
+                                                                <p className="text-xs text-slate-500">
+                                                                    {[doc.regNo && `Reg: ${doc.regNo}`, doc.qualification].filter(Boolean).join(' • ')}
+                                                                </p>
+                                                            </div>
+                                                            <span className="text-xs text-primary font-medium shrink-0">Select</span>
+                                                        </button>
+                                                    ))}
+                                                    <button type="button"
+                                                        onClick={() => { setShowCreateForm(true); setNewDoctorName(doctorQuery); setDoctorQuery(''); }}
+                                                        className="w-full flex items-center gap-2 px-3 py-2.5 text-primary hover:bg-blue-50 text-sm font-medium transition-colors">
+                                                        <Plus className="w-4 h-4" />
+                                                        {doctorResults.length === 0
+                                                            ? `No results — Create "${doctorQuery}"`
+                                                            : `Add "${doctorQuery}" as new doctor`}
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
                                     )}
-                                />
-                                <FormField
-                                    control={form.control}
-                                    name="doctorRegNo"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>Registration No. *</FormLabel>
-                                            <FormControl>
-                                                <Input data-testid="sh-doctor-regno" placeholder="MH/12345" {...field} />
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
+
+                                    {form.formState.errors.doctorName && !selectedDoctor && (
+                                        <p className="text-xs text-red-500">Doctor is required</p>
                                     )}
-                                />
-                            </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Patient Details Section */}
                         <div className="space-y-4">
                             <h3 className="text-sm font-semibold text-slate-900 border-b pb-2">Patient Details</h3>
+
+                            {/* Patient quick-fill search */}
+                            <div className="space-y-1">
+                                <label className="text-xs font-medium text-slate-500">Quick-fill from existing customer</label>
+                                <div className="flex items-center gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-white focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all">
+                                    <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                    <input
+                                        value={patientQuery}
+                                        onChange={e => { setPatientQuery(e.target.value); setShowPatientResults(true); }}
+                                        onFocus={() => setShowPatientResults(true)}
+                                        placeholder="Search patient by name or phone…"
+                                        className="flex-1 text-sm outline-none bg-transparent placeholder:text-slate-400"
+                                        autoComplete="off"
+                                    />
+                                    {patientQuery && (
+                                        <button type="button" onClick={() => { setPatientQuery(''); setShowPatientResults(false); }} className="text-slate-400 hover:text-slate-600">
+                                            <X className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
+                                </div>
+
+                                {showPatientResults && debouncedPatientQuery.length >= 2 && (
+                                    <div className="border border-slate-200 rounded-lg bg-white divide-y max-h-36 overflow-y-auto shadow-sm">
+                                        {isPatientSearching ? (
+                                            <div className="flex items-center gap-2 px-3 py-2 text-sm text-slate-500">
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
+                                            </div>
+                                        ) : patientResults.length === 0 ? (
+                                            <div className="px-3 py-2 text-sm text-slate-500">No customer found — fill manually below</div>
+                                        ) : (
+                                            patientResults.map((c: any) => (
+                                                <button key={c.id} type="button"
+                                                    onClick={() => {
+                                                        form.setValue('patientName', c.name, { shouldValidate: true });
+                                                        form.setValue('patientAddress', c.address || '', { shouldValidate: true });
+                                                        setPatientQuery('');
+                                                        setShowPatientResults(false);
+                                                    }}
+                                                    className="w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-50 text-left transition-colors">
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-sm font-medium text-slate-800 truncate">{c.name}</p>
+                                                        <p className="text-xs text-slate-500">{c.phone}{c.address ? ` • ${c.address}` : ''}</p>
+                                                    </div>
+                                                    <span className="text-xs text-primary font-medium shrink-0">Fill</span>
+                                                </button>
+                                            ))
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="grid grid-cols-3 gap-4">
                                 <FormField
                                     control={form.control}
@@ -196,10 +392,10 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                             <h3 className="text-sm font-semibold text-slate-900 border-b pb-2">Prescription Image (Optional)</h3>
                             {!previewUrl ? (
                                 <div className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-primary hover:bg-slate-50 transition relative overflow-hidden group">
-                                    <input 
-                                        type="file" 
-                                        accept="image/jpeg, image/png" 
-                                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" 
+                                    <input
+                                        type="file"
+                                        accept="image/jpeg, image/png"
+                                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                                         onChange={handleFileChange}
                                     />
                                     <ImagePlus className="w-8 h-8 mx-auto text-slate-400 group-hover:text-primary mb-2" />

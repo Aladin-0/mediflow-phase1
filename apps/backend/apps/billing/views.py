@@ -5,8 +5,9 @@ from django.db.models import Sum, Count, Q, F
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from apps.core.permissions import IsManagerOrAbove
 from rest_framework import status
-from decimal import Decimal
+from decimal import Decimal, ROUND_FLOOR
 from datetime import datetime, timedelta, date
 
 from apps.billing.models import (
@@ -21,7 +22,8 @@ from apps.billing.services import (
     ScheduleHViolationError,
 )
 from apps.inventory.models import Batch, MasterProduct
-from apps.accounts.models import Staff, Customer
+from apps.accounts.models import Staff, Customer, Ledger
+from apps.accounts.journal_service import post_sale_invoice
 from apps.core.models import Outlet
 from apps.billing.payment_services import (
     create_receipt_payment, create_expense_entry, create_sales_return,
@@ -150,9 +152,34 @@ class SaleCreateView(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # Validate customer exists if provided
+            # Resolve customer — ledger-first (Marg-style) or legacy customerId
+            party_ledger_id = request.data.get('partyLedgerId')
             customer = None
-            if customer_id:
+            if party_ledger_id:
+                try:
+                    party_ledger = Ledger.objects.select_related('linked_customer').get(
+                        id=party_ledger_id, outlet=outlet
+                    )
+                except Ledger.DoesNotExist:
+                    return Response({'detail': f'Ledger {party_ledger_id} not found'}, status=404)
+
+                if party_ledger.linked_customer:
+                    customer = party_ledger.linked_customer
+                else:
+                    # Safely get or create the Customer to avoid duplicate phone crashes
+                    phone_number = party_ledger.phone or '0000000000'
+                    customer, created = Customer.objects.get_or_create(
+                        outlet=outlet,
+                        phone=phone_number,
+                        defaults={
+                            'name': party_ledger.name or 'Walk-in Customer',
+                            'address': party_ledger.address or '',
+                            'gstin': party_ledger.gstin or None,
+                        }
+                    )
+                    party_ledger.linked_customer = customer
+                    party_ledger.save(update_fields=['linked_customer'])
+            elif customer_id:
                 try:
                     customer = Customer.objects.get(id=customer_id, outlet=outlet)
                 except Customer.DoesNotExist:
@@ -166,6 +193,20 @@ class SaleCreateView(APIView):
                 billed_by = Staff.objects.get(id=request.user.id)
             except (Staff.DoesNotExist, AttributeError):
                 billed_by = None
+
+            # H5: Enforce per-staff max_discount before entering the transaction
+            if billed_by:
+                staff_max_discount = billed_by.max_discount
+                for item_data in items_data:
+                    item_disc = Decimal(str(item_data.get('discountPct', 0)))
+                    if item_disc > staff_max_discount:
+                        return Response(
+                            {'detail': (
+                                f"Discount {item_disc}% exceeds your maximum allowed "
+                                f"discount of {staff_max_discount}%"
+                            )},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
 
             logger.info(f"Creating sale invoice for outlet {outlet.name}")
 
@@ -196,7 +237,22 @@ class SaleCreateView(APIView):
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
 
-                # Step 3 & 5: Create SaleInvoice and SaleItems with FEFO batch selection and stock deduction
+                # Step 3 & 5: Create SaleInvoice (GST fields are placeholders — re-derived after items are created)
+                client_grand_total = Decimal(str(request.data.get('grandTotal', 0)))
+                extra_discount_pct = Decimal(str(request.data.get('extraDiscountPct', 0)))
+
+                # M1: Validate payment amounts sum to grandTotal (tolerance ±₹0.01)
+                cash_paid_val = Decimal(str(request.data.get('cashPaid', 0)))
+                upi_paid_val = Decimal(str(request.data.get('upiPaid', 0)))
+                card_paid_val = Decimal(str(request.data.get('cardPaid', 0)))
+                credit_given_val = Decimal(str(request.data.get('creditGiven', 0)))
+                payment_sum = cash_paid_val + upi_paid_val + card_paid_val + credit_given_val
+                if abs(payment_sum - client_grand_total) > Decimal('0.01'):
+                    return Response(
+                        {'detail': f'Payment amounts ({payment_sum}) do not match grand total ({client_grand_total})'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
                 sale_invoice = SaleInvoice.objects.create(
                     outlet=outlet,
                     invoice_no=invoice_no,
@@ -204,26 +260,24 @@ class SaleCreateView(APIView):
                     customer=customer,
                     subtotal=Decimal(str(request.data.get('subtotal', 0))),
                     discount_amount=Decimal(str(request.data.get('discountAmount', 0))),
-                    taxable_amount=Decimal(str(request.data.get('taxableAmount', 0))),
-                    cgst_amount=Decimal(str(request.data.get('cgstAmount', 0))),
-                    sgst_amount=Decimal(str(request.data.get('sgstAmount', 0))),
-                    igst_amount=Decimal(str(request.data.get('igstAmount', 0))),
-                    cgst=Decimal(str(request.data.get('cgst', 0))),
-                    sgst=Decimal(str(request.data.get('sgst', 0))),
-                    igst=Decimal(str(request.data.get('igst', 0))),
-                    round_off=Decimal(str(request.data.get('roundOff', 0))),
-                    grand_total=Decimal(str(request.data.get('grandTotal', 0))),
+                    extra_discount_pct=extra_discount_pct,
+                    # Placeholder GST values — overwritten by server re-derivation below
+                    taxable_amount=Decimal('0'),
+                    cgst_amount=Decimal('0'),
+                    sgst_amount=Decimal('0'),
+                    igst_amount=Decimal('0'),
+                    cgst=Decimal('0'),
+                    sgst=Decimal('0'),
+                    igst=Decimal('0'),
+                    round_off=Decimal('0'),
+                    grand_total=client_grand_total,
                     payment_mode=request.data.get('paymentMode', 'cash'),
-                    cash_paid=Decimal(str(request.data.get('cashPaid', 0))),
-                    upi_paid=Decimal(str(request.data.get('upiPaid', 0))),
-                    card_paid=Decimal(str(request.data.get('cardPaid', 0))),
-                    credit_given=Decimal(str(request.data.get('creditGiven', 0))),
-                    amount_paid=Decimal(str(
-                        float(request.data.get('cashPaid', 0)) +
-                        float(request.data.get('upiPaid', 0)) +
-                        float(request.data.get('cardPaid', 0))
-                    )),
-                    amount_due=Decimal(str(request.data.get('creditGiven', 0))),
+                    cash_paid=cash_paid_val,
+                    upi_paid=upi_paid_val,
+                    card_paid=card_paid_val,
+                    credit_given=credit_given_val,
+                    amount_paid=cash_paid_val + upi_paid_val + card_paid_val,
+                    amount_due=max(Decimal('0'), client_grand_total - (cash_paid_val + upi_paid_val + card_paid_val)),
                     billed_by=billed_by,
                 )
 
@@ -239,38 +293,50 @@ class SaleCreateView(APIView):
                     try:
                         # Get product details
                         product = MasterProduct.objects.get(id=product_id)
+                        qty_loose_needed = item_data.get('qtyLoose', 0)
 
-                        # Get batch (either from batchId or use FEFO selection)
                         if batch_id:
-                            # Batch specified by frontend (already FEFO-selected on client)
                             try:
                                 batch = Batch.objects.get(id=batch_id, outlet=outlet, product=product)
                             except Batch.DoesNotExist:
                                 raise InsufficientStockError(f"Batch {batch_id} not found")
 
-                            # Verify sufficient stock in this batch
-                            if batch.qty_strips < qty_strips_needed:
+                            # --- THE PHARMACY MATH: Check total tablets available ---
+                            total_loose_needed = (qty_strips_needed * product.pack_size) + qty_loose_needed
+                            total_loose_available = (batch.qty_strips * product.pack_size) + batch.qty_loose
+                            
+                            if total_loose_available < total_loose_needed:
                                 raise InsufficientStockError(
-                                    f"Insufficient stock in batch {batch.batch_no}. "
-                                    f"Required: {qty_strips_needed}, Available: {batch.qty_strips}"
+                                    f"Insufficient stock in batch {batch.batch_no}."
                                 )
 
-                            batch_allocations = [{'batch': batch, 'qty_to_deduct': qty_strips_needed}]
+                            # We pass BOTH strips and loose to the allocation
+                            batch_allocations = [{
+                                'batch': batch, 
+                                'qty_to_deduct': qty_strips_needed,
+                                'loose_to_deduct': qty_loose_needed
+                            }]
                         else:
-                            # Step 3: Select batches using FEFO
+                            # FEFO logic (assumes strips for now)
                             batch_allocations = fefo_batch_select(
-                                outlet_id=str(outlet_id),
-                                product_id=str(product_id),
-                                qty_strips_needed=qty_strips_needed
+                                outlet_id=str(outlet_id), product_id=str(product_id), qty_strips_needed=qty_strips_needed
                             )
 
-                        # Step 5: Deduct stock and create SaleItems
+                        # Step 5: Deduct stock and Create SaleItems
                         for batch_alloc in batch_allocations:
                             batch = batch_alloc['batch']
-                            qty_to_deduct = batch_alloc['qty_to_deduct']
+                            qty_to_deduct = batch_alloc.get('qty_to_deduct', 0)
+                            loose_to_deduct = batch_alloc.get('loose_to_deduct', 0)
 
-                            # Deduct stock atomically
+                            # Deduct what the user asked for
                             batch.qty_strips -= qty_to_deduct
+                            batch.qty_loose -= loose_to_deduct
+
+                            # MAGIC: If loose tablets go below 0, break open a strip!
+                            while batch.qty_loose < 0:
+                                batch.qty_strips -= 1
+                                batch.qty_loose += product.pack_size
+
                             batch.save()
 
                             logger.debug(f"Deducted {qty_to_deduct} strips from batch {batch.batch_no}")
@@ -302,7 +368,7 @@ class SaleCreateView(APIView):
                             sale_items.append(sale_item)
 
                             # Step 6: Create ScheduleHRegister if Schedule H drug
-                            if product.schedule_type in ['H', 'H1', 'X', 'Narcotic']:
+                            if product.schedule_type in ['G', 'H', 'H1', 'X', 'C', 'Narcotic']:
                                 ScheduleHRegister.objects.create(
                                     sale_item=sale_item,
                                     patient_name=schedule_h_data.get('patientName') if schedule_h_data else None,
@@ -321,9 +387,70 @@ class SaleCreateView(APIView):
                         logger.error(f"Insufficient stock: {str(e)}")
                         raise
 
+                # ── C3 fix: Re-derive GST server-side from line items ──
+                # Never trust client-sent cgst/sgst/igst values.
+                discount_factor = Decimal('1') - extra_discount_pct / Decimal('100')
+                server_taxable = Decimal('0')
+                server_cgst = Decimal('0')
+                server_sgst = Decimal('0')
+                server_igst = Decimal('0')
+                max_gst_rate = Decimal('0')
+
+                for si in sale_items:
+                    raw_total = si.rate * si.qty_strips
+                    # Apply extra discount proportionally before GST extraction
+                    discounted_total = (raw_total * discount_factor).quantize(Decimal('0.01'))
+                    gst_rate = si.gst_rate
+
+                    if gst_rate > 0:
+                        item_taxable = (discounted_total * Decimal('100') / (Decimal('100') + gst_rate)).quantize(Decimal('0.01'))
+                        item_gst = discounted_total - item_taxable
+                    else:
+                        item_taxable = discounted_total
+                        item_gst = Decimal('0')
+
+                    server_taxable += item_taxable
+
+                    # H8 fix: floor-based CGST/SGST split — guarantees cgst + sgst = item_gst exactly
+                    # TODO: use outlet state vs customer state to determine IGST (C9)
+                    item_cgst = (item_gst / 2).quantize(Decimal('0.01'), rounding=ROUND_FLOOR)
+                    item_sgst = item_gst - item_cgst
+                    server_cgst += item_cgst
+                    server_sgst += item_sgst
+
+                    if gst_rate > max_gst_rate:
+                        max_gst_rate = gst_rate
+
+                # round_off absorbs any sub-rupee difference
+                raw_exact = server_taxable + server_cgst + server_sgst + server_igst
+                server_round_off = client_grand_total - raw_exact
+
+                # Sanity check: round_off should never exceed ±₹1
+                if abs(server_round_off) > Decimal('1.00'):
+                    logger.warning(
+                        f"Large round-off ₹{server_round_off} for invoice {invoice_no}: "
+                        f"client_grand_total={client_grand_total}, server_exact={raw_exact}"
+                    )
+
+                # Update invoice with server-computed GST values
+                sale_invoice.taxable_amount = server_taxable
+                sale_invoice.cgst_amount = server_cgst
+                sale_invoice.sgst_amount = server_sgst
+                sale_invoice.igst_amount = server_igst
+                sale_invoice.cgst = max_gst_rate / 2 if max_gst_rate > 0 else Decimal('0')
+                sale_invoice.sgst = max_gst_rate / 2 if max_gst_rate > 0 else Decimal('0')
+                sale_invoice.igst = Decimal('0')
+                sale_invoice.round_off = server_round_off
+                sale_invoice.save()
+
+                logger.info(
+                    f"Server-derived GST for {invoice_no}: "
+                    f"taxable={server_taxable}, cgst={server_cgst}, sgst={server_sgst}, "
+                    f"round_off={server_round_off}, extra_disc={extra_discount_pct}%"
+                )
+
                 # Step 7: Create CreditTransaction if credit_given > 0
-                credit_given = Decimal(str(request.data.get('creditGiven', 0)))
-                if credit_given > 0 and customer:
+                if credit_given_val > 0 and customer:
                     # Get or create CreditAccount
                     credit_account, _ = CreditAccount.objects.get_or_create(
                         outlet=outlet,
@@ -331,8 +458,8 @@ class SaleCreateView(APIView):
                     )
 
                     # Update outstanding
-                    credit_account.total_outstanding += credit_given
-                    credit_account.total_borrowed += credit_given
+                    credit_account.total_outstanding += credit_given_val
+                    credit_account.total_borrowed += credit_given_val
                     credit_account.last_transaction_date = timezone.now()
                     credit_account.save()
 
@@ -342,14 +469,21 @@ class SaleCreateView(APIView):
                         customer=customer,
                         invoice=sale_invoice,
                         type='debit',
-                        amount=credit_given,
+                        amount=credit_given_val,
                         description=f'Sale on {invoice_no}',
                         balance_after=credit_account.total_outstanding,
                         recorded_by=billed_by,
                         date=timezone.now().date(),
                     )
 
-                    logger.info(f"Created CreditTransaction for customer {customer.name}: ₹{credit_given}")
+                    logger.info(f"Created CreditTransaction for customer {customer.name}: ₹{credit_given_val}")
+
+                # Post journal entry to general ledger (auto journal posting)
+                try:
+                    post_sale_invoice(sale_invoice)
+                except Exception as e:
+                    logger.error(f"Journal posting failed for sale {sale_invoice.id}: {e}")
+                    raise  # Re-raise to rollback entire transaction
 
             # Serialize response
             response_data = {
@@ -358,8 +492,45 @@ class SaleCreateView(APIView):
                 'invoiceNo': sale_invoice.invoice_no,
                 'invoiceDate': sale_invoice.invoice_date.isoformat(),
                 'customerId': str(sale_invoice.customer.id) if sale_invoice.customer else None,
+                'customer': {
+                    'id': str(sale_invoice.customer.id),
+                    'name': sale_invoice.customer.name,
+                    'phone': sale_invoice.customer.phone,
+                    'address': sale_invoice.customer.address,
+                } if sale_invoice.customer else None,
+                'items': [
+                    {
+                        'batchId': str(si.batch_id) if si.batch_id else '',
+                        'productId': str(si.batch.product_id) if si.batch and si.batch.product_id else '',
+                        'name': si.product_name,
+                        'composition': si.composition,
+                        'manufacturer': si.batch.product.manufacturer if si.batch and si.batch.product else None,
+                        'packSize': si.pack_size,
+                        'packUnit': si.pack_unit,
+                        'batchNo': si.batch_no,
+                        'expiryDate': si.expiry_date.isoformat(),
+                        'scheduleType': si.schedule_type,
+                        'mrp': float(si.mrp),
+                        'rate': float(si.rate),
+                        'qtyStrips': si.qty_strips,
+                        'qtyLoose': si.qty_loose,
+                        'totalQty': si.qty_strips * si.pack_size + si.qty_loose if si.pack_size else si.qty_strips,
+                        'saleMode': si.sale_mode,
+                        'discountPct': float(si.discount_pct),
+                        'gstRate': float(si.gst_rate),
+                        'taxableAmount': float(si.taxable_amount),
+                        'gstAmount': float(si.gst_amount),
+                        'totalAmount': float(si.total_amount),
+                    }
+                    for si in sale_items
+                ],
                 'subtotal': float(sale_invoice.subtotal),
                 'discountAmount': float(sale_invoice.discount_amount),
+                'extraDiscountPct': float(sale_invoice.extra_discount_pct),
+                'extraDiscountAmount': float(
+                    (sale_invoice.subtotal - sale_invoice.discount_amount)
+                    * sale_invoice.extra_discount_pct / Decimal('100')
+                ),
                 'taxableAmount': float(sale_invoice.taxable_amount),
                 'cgstAmount': float(sale_invoice.cgst_amount),
                 'sgstAmount': float(sale_invoice.sgst_amount),
@@ -444,11 +615,18 @@ class SaleListView(APIView):
         logger.info(f"Fetching sales invoices for outlet: {outlet.name}")
 
         # Get all invoices for this outlet, ordered by date (newest first)
-        invoices = SaleInvoice.objects.filter(outlet=outlet).order_by('-invoice_date', '-created_at')
+        invoices = SaleInvoice.objects.filter(outlet=outlet).annotate(
+            items_count=Count('items')
+        ).order_by('-invoice_date', '-created_at')
+
+        # Optional customer filter
+        customer_id = request.query_params.get('customerId') or request.query_params.get('customer_id')
+        if customer_id:
+            invoices = invoices.filter(customer_id=customer_id)
 
         # Pagination
         page = int(request.query_params.get('page', 1))
-        page_size = min(int(request.query_params.get('pageSize', 50)), 100)
+        page_size = min(int(request.query_params.get('pageSize', 50)), 200)
 
         total_records = invoices.count()
         total_pages = (total_records + page_size - 1) // page_size
@@ -486,6 +664,7 @@ class SaleListView(APIView):
                 'isReturn': invoice.is_return,
                 'billedBy': str(invoice.billed_by.id) if invoice.billed_by else None,
                 'billedByName': invoice.billed_by.name if invoice.billed_by else None,
+                'itemsCount': getattr(invoice, 'items_count', 0),
                 'createdAt': invoice.created_at.isoformat(),
             }
             results.append(result)
@@ -501,6 +680,43 @@ class SaleListView(APIView):
                 'totalRecords': total_records
             }
         }, status=status.HTTP_200_OK)
+
+
+class SaleItemsView(APIView):
+    """
+    GET /api/v1/sales/{id}/items/
+
+    Returns the full line-item list for a single sale invoice.
+    Used by the customer invoice history expandable rows.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, sale_id, *args, **kwargs):
+        try:
+            invoice = SaleInvoice.objects.get(id=sale_id)
+        except SaleInvoice.DoesNotExist:
+            return Response({'detail': 'Invoice not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        items = invoice.items.all().order_by('created_at')
+        results = []
+        for item in items:
+            results.append({
+                'id': str(item.id),
+                'productName': item.product_name,
+                'qtyStrips': item.qty_strips,
+                'qtyLoose': item.qty_loose,
+                'totalQty': item.qty_strips + item.qty_loose,
+                'rate': float(item.rate),
+                'discountPct': float(item.discount_pct),
+                'totalAmount': float(item.total_amount),
+                'packSize': item.pack_size,
+                'packUnit': item.pack_unit,
+                'batchNo': item.batch_no,
+                'expiryDate': item.expiry_date.isoformat() if item.expiry_date else None,
+                'gstRate': float(item.gst_rate),
+            })
+        return Response({'data': results}, status=status.HTTP_200_OK)
 
 
 class CustomerCreditPaymentView(APIView):
@@ -652,6 +868,23 @@ class CustomerCreditPaymentView(APIView):
                 )
 
                 logger.info(f"Created LedgerEntry with running_balance={running_balance}")
+
+                # Step 4: Post double-entry journal for this payment collection
+                try:
+                    from apps.accounts.journal_service import post_credit_payment
+                    post_credit_payment(
+                        outlet=outlet,
+                        customer=credit_account.customer,
+                        amount=amount,
+                        payment_mode=payment_mode or 'cash',
+                        source_id=credit_transaction.id,
+                        narration=f"Credit payment received - {credit_account.customer.name}",
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Journal posting failed for credit payment {credit_transaction.id}: {e}"
+                    )
+                    raise  # Re-raise to rollback entire transaction
 
             # Serialize response matching CreditAccount shape
             result = self._serialize_credit_account(credit_account)
@@ -908,6 +1141,8 @@ class DashboardDailyView(APIView):
         ).select_related('product')
 
         for batch in low_stock_batches:
+            if batch.product is None:
+                continue
             alerts['lowStock'].append({
                 'batch': {
                     'productName': batch.product.name,
@@ -928,6 +1163,8 @@ class DashboardDailyView(APIView):
         ).select_related('product')
 
         for batch in expiring_batches:
+            if batch.product is None:
+                continue
             days_until = (batch.expiry_date - target_date).days
             alerts['expiringSoon'].append({
                 'batch': {
@@ -1222,6 +1459,7 @@ class SaleDetailView(APIView):
                 'productId': str(item.batch.product_id) if item.batch and item.batch.product_id else '',
                 'name': item.product_name,
                 'composition': item.composition,
+                'manufacturer': item.batch.product.manufacturer if item.batch and item.batch.product else None,
                 'packSize': item.pack_size,
                 'packUnit': item.pack_unit,
                 'batchNo': item.batch_no,
@@ -1703,7 +1941,7 @@ class UpdateCreditLimitView(APIView):
 
 class CreateSalesReturnView(APIView):
     """POST /api/v1/sales/return/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def post(self, request, *args, **kwargs):
         outlet_id = request.data.get('outletId') or (
@@ -1731,7 +1969,7 @@ class CreateSalesReturnView(APIView):
 
 class SalesReturnListView(APIView):
     """GET /api/v1/sales/returns/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, *args, **kwargs):
         outlet_id = request.query_params.get('outletId') or (
@@ -1784,7 +2022,7 @@ class SalesReturnListView(APIView):
 
 class SalesReturnDetailView(APIView):
     """GET /api/v1/sales/returns/{id}/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, pk, *args, **kwargs):
         outlet_id = request.query_params.get('outletId') or (
@@ -1828,7 +2066,7 @@ class SalesReturnDetailView(APIView):
 
 class SalesReturnPrintView(APIView):
     """GET /api/v1/sales/returns/{id}/print/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsManagerOrAbove]
 
     def get(self, request, pk, *args, **kwargs):
         outlet_id = request.query_params.get('outletId') or (
@@ -2057,3 +2295,57 @@ class MargMigrationView(APIView):
                 'errors': errors,
             }
         }, status=status.HTTP_200_OK)
+
+
+class SaleInvoiceSearchView(APIView):
+    """GET /api/v1/sales/invoices/search/?outletId=xxx&q=INV-001"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from apps.core.models import Outlet
+        outlet_id = request.query_params.get('outletId')
+        q = request.query_params.get('q', '').strip()
+        if not outlet_id:
+            return Response({'detail': 'outletId required'}, status=400)
+        try:
+            outlet = Outlet.objects.get(id=outlet_id)
+        except Outlet.DoesNotExist:
+            return Response({'detail': 'Outlet not found'}, status=404)
+
+        qs = SaleInvoice.objects.filter(outlet=outlet, is_return=False).select_related('customer').prefetch_related('items')
+        if q:
+            qs = qs.filter(
+                Q(invoice_no__icontains=q) | Q(customer__name__icontains=q)
+            )
+        qs = qs.order_by('-invoice_date')[:20]
+
+        results = []
+        for inv in qs:
+            items = []
+            for item in inv.items.all():
+                items.append({
+                    'id': str(item.id),
+                    'batchId': str(item.batch_id) if item.batch_id else '', # THE FIX
+                    'productName': item.product_name,
+                    'batchNo': item.batch_no,
+                    'expiry': str(item.expiry_date),
+                    # Send total quantities correctly
+                    'qtyStrips': item.qty_strips,
+                    'qtyLoose': item.qty_loose,
+                    'packSize': item.pack_size,
+                    # Fallback 'qty' for simple frontend tables (Total units)
+                    'qty': (item.qty_strips * (item.pack_size or 1)) + item.qty_loose,
+                    'rate': float(item.sale_rate),
+                    'discPercent': float(item.discount_pct),
+                    'gstRate': float(item.gst_rate),
+                })
+            results.append({
+                'id': str(inv.id),
+                'invoiceNo': inv.invoice_no,
+                'date': str(inv.invoice_date.date()) if hasattr(inv.invoice_date, 'date') else str(inv.invoice_date),
+                'customerName': inv.customer.name if inv.customer else 'Walk-in',
+                'customerId': str(inv.customer.id) if inv.customer else None,
+                'grandTotal': float(inv.grand_total),
+                'items': items,
+            })
+        return Response({'data': results})

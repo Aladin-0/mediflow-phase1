@@ -42,7 +42,10 @@ export function StaffFormModal({ open, onClose, editingStaff }: StaffFormModalPr
                 role: 'billing_staff',
                 phone: '',
                 email: '',
+                password: '',
+                confirmPassword: '',
                 pin: '',
+                confirmPin: '',
                 joinDate: new Date().toISOString().split('T')[0],
                 salary: '',
                 maxDiscount: 0,
@@ -61,7 +64,10 @@ export function StaffFormModal({ open, onClose, editingStaff }: StaffFormModalPr
                 role: editingStaff.role,
                 phone: editingStaff.phone ?? '',
                 email: editingStaff.email ?? '',
+                password: '',
+                confirmPassword: '',
                 pin: '',
+                confirmPin: '',
                 joinDate: editingStaff.joinDate ?? '',
                 salary: editingStaff.salary ?? '',
                 maxDiscount: editingStaff.maxDiscount ?? 0,
@@ -76,7 +82,11 @@ export function StaffFormModal({ open, onClose, editingStaff }: StaffFormModalPr
     }, [editingStaff, reset]);
 
     const onSubmit = (data: any) => {
-        // Remove empty PIN on edit (only hash if changed)
+        // Strip confirm fields — never sent to backend
+        delete data.confirmPassword;
+        delete data.confirmPin;
+        // On edit, omit password/pin if left blank (backend keeps existing)
+        if (isEdit && !data.password) delete data.password;
         if (isEdit && !data.pin) delete data.pin;
 
         if (isEdit) {
@@ -171,23 +181,103 @@ export function StaffFormModal({ open, onClose, editingStaff }: StaffFormModalPr
                         </p>
 
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                                <Label>{isEdit ? 'New PIN (leave blank to keep)' : 'Billing PIN *'}</Label>
+
+                            {/* Password */}
+                            <div className="space-y-1 col-span-2">
+                                <Label>
+                                    {isEdit ? 'New Password (leave blank to keep current)' : 'Password *'}
+                                </Label>
                                 <Input
-                                    {...register('pin', {
-                                        required: isEdit ? false : 'PIN is required',
-                                        minLength: { value: 4, message: 'PIN must be 4 digits' },
-                                        maxLength: { value: 6, message: 'PIN max 6 digits' },
-                                        pattern: { value: /^\d+$/, message: 'PIN must be numeric' }
+                                    {...register('password', {
+                                        required: isEdit ? false : 'Password is required',
+                                        minLength: { value: 6, message: 'Password must be at least 6 characters' },
                                     })}
                                     type="password"
-                                    placeholder="4-6 digit PIN"
+                                    placeholder={isEdit ? 'Leave blank to keep current' : 'Min. 6 characters'}
+                                    autoComplete={isEdit ? 'new-password' : 'new-password'}
+                                />
+                                {errors.password && (
+                                    <p className="text-xs text-red-500">{errors.password.message as string}</p>
+                                )}
+                                {!isEdit && (
+                                    <p className="text-xs text-slate-500">
+                                        Staff use their phone number + this password to log into MediFlow
+                                    </p>
+                                )}
+                            </div>
+
+                            {/* Confirm Password */}
+                            <div className="space-y-1 col-span-2">
+                                <Label>
+                                    {isEdit ? 'Confirm New Password' : 'Confirm Password *'}
+                                </Label>
+                                <Input
+                                    {...register('confirmPassword', {
+                                        required: isEdit ? false : 'Please confirm the password',
+                                        validate: (val) => {
+                                            const pwd = watch('password');
+                                            if (!pwd) return true;
+                                            return val === pwd || 'Passwords do not match';
+                                        },
+                                    })}
+                                    type="password"
+                                    placeholder="Re-enter password"
+                                    autoComplete="new-password"
+                                />
+                                {errors.confirmPassword && (
+                                    <p className="text-xs text-red-500">{errors.confirmPassword.message as string}</p>
+                                )}
+                            </div>
+
+                            {/* Billing PIN */}
+                            <div className="space-y-1 col-span-2">
+                                <Label>
+                                    {isEdit ? 'New Billing PIN (leave blank to keep current)' : 'Billing PIN *'}
+                                </Label>
+                                <Input
+                                    {...register('pin', {
+                                        required: isEdit ? false : 'Billing PIN is required',
+                                        minLength: { value: 4, message: 'PIN must be 4 digits' },
+                                        maxLength: { value: 6, message: 'PIN max 6 digits' },
+                                        pattern: { value: /^\d+$/, message: 'PIN must be numeric' },
+                                    })}
+                                    type="password"
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    placeholder="4–6 digit number"
                                     maxLength={6}
                                 />
                                 {errors.pin && (
                                     <p className="text-xs text-red-500">{errors.pin.message as string}</p>
                                 )}
+                                {!isEdit && (
+                                    <p className="text-xs text-slate-500">
+                                        4–6 digit number used at the billing counter
+                                    </p>
+                                )}
                             </div>
+
+                            {/* Confirm Billing PIN — create only */}
+                            {!isEdit && (
+                                <div className="space-y-1 col-span-2">
+                                    <Label>Confirm Billing PIN *</Label>
+                                    <Input
+                                        {...register('confirmPin', {
+                                            required: 'Please confirm the PIN',
+                                            validate: (val) =>
+                                                val === watch('pin') || 'PINs do not match',
+                                        })}
+                                        type="password"
+                                        inputMode="numeric"
+                                        pattern="[0-9]*"
+                                        placeholder="Re-enter PIN"
+                                        maxLength={6}
+                                    />
+                                    {errors.confirmPin && (
+                                        <p className="text-xs text-red-500">{errors.confirmPin.message as string}</p>
+                                    )}
+                                </div>
+                            )}
 
                             <div className="space-y-1">
                                 <Label>Max Discount Allowed (%)</Label>

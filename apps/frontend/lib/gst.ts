@@ -31,32 +31,42 @@ export function calculateItemTotals(
     };
 }
 
-export function calculateBillTotals(items: CartItem[]): BillTotals {
+export function calculateBillTotals(items: CartItem[], extraDiscPct: number = 0): BillTotals {
+    const discountFactor = extraDiscPct > 0 ? 1 - extraDiscPct / 100 : 1;
+
     let subtotal = 0;
-    let discountedTotalRates = 0;
+    let totalRateAmount = 0;
     let taxableAmount = 0;
     let cgstAmount = 0;
     let sgstAmount = 0;
 
     items.forEach(item => {
-        subtotal += (item.mrp * item.totalQty);
-        discountedTotalRates += (item.rate * item.totalQty);
+        const rawTotal = item.rate * item.totalQty;
+        subtotal += item.mrp * item.totalQty;
+        totalRateAmount += rawTotal;
 
-        // Using exactly calculated items
-        const totals = calculateItemTotals(
-            item.mrp,
-            item.rate,
-            item.totalQty,
-            item.discountPct, // rate already factored in but we rely on exact calculations
-            item.gstRate
-        );
+        // C2 fix: apply extra discount per-item BEFORE GST extraction
+        const discountedTotal = rawTotal * discountFactor;
+        const gstRate = item.gstRate || 0;
 
-        taxableAmount += totals.taxableAmount;
-        cgstAmount += totals.gstAmount / 2;
-        sgstAmount += Math.round(totals.gstAmount * 100) / 100 - (totals.gstAmount / 2); // Avoid floating diffs
+        // Quantize itemTaxable to 2 decimals BEFORE computing itemGst
+        // so the floor-based CGST/SGST split matches the backend exactly.
+        const itemTaxable = gstRate > 0
+            ? Number((discountedTotal / (1 + gstRate / 100)).toFixed(2))
+            : Number(discountedTotal.toFixed(2));
+        const itemGst = Number((discountedTotal - itemTaxable).toFixed(2));
+
+        taxableAmount += itemTaxable;
+
+        // H8 fix: floor-based CGST/SGST split — guarantees sum = itemGst exactly
+        const itemCgst = Math.floor(itemGst * 100 / 2) / 100;
+        const itemSgst = Number((itemGst - itemCgst).toFixed(2));
+        cgstAmount += itemCgst;
+        sgstAmount += itemSgst;
     });
 
-    const discountAmount = subtotal - discountedTotalRates;
+    const discountAmount = subtotal - totalRateAmount;
+    const extraDiscountAmount = totalRateAmount * extraDiscPct / 100;
     const rawTotal = taxableAmount + cgstAmount + sgstAmount;
     const grandTotal = Math.round(rawTotal);
     const roundOff = grandTotal - rawTotal;
@@ -64,10 +74,11 @@ export function calculateBillTotals(items: CartItem[]): BillTotals {
     return {
         subtotal: Number(subtotal.toFixed(2)),
         discountAmount: Number(discountAmount.toFixed(2)),
+        extraDiscountAmount: Number(extraDiscountAmount.toFixed(2)),
         taxableAmount: Number(taxableAmount.toFixed(2)),
         cgstAmount: Number(cgstAmount.toFixed(2)),
         sgstAmount: Number(sgstAmount.toFixed(2)),
-        cgst: Number(cgstAmount.toFixed(2)), // For simplicity we assume full rate breakdown
+        cgst: Number(cgstAmount.toFixed(2)),
         sgst: Number(sgstAmount.toFixed(2)),
         igst: 0,
         roundOff: Number(roundOff.toFixed(2)),
@@ -76,8 +87,8 @@ export function calculateBillTotals(items: CartItem[]): BillTotals {
         amountDue: Number(grandTotal.toFixed(2)),
         itemCount: items.length,
         totalQty: items.reduce((acc, item) => acc + item.totalQty, 0),
-        hasScheduleH: items.some(item => ['H', 'H1', 'X', 'Narcotic'].includes(item.scheduleType)),
-        requiresDoctorDetails: items.some(item => ['H1', 'X', 'Narcotic'].includes(item.scheduleType))
+        hasScheduleH: items.some(item => ['G', 'H', 'H1', 'X', 'C', 'Narcotic'].includes(item.scheduleType)),
+        requiresDoctorDetails: items.some(item => ['G', 'H', 'H1', 'X', 'C', 'Narcotic'].includes(item.scheduleType))
     };
 }
 

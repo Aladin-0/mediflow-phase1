@@ -1,7 +1,9 @@
 import logging
+import re
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from apps.core.permissions import IsAdminStaff
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework import status
 from django.db.models import Q, Sum
@@ -54,11 +56,11 @@ class LoginView(APIView):
         """
 
         phone = request.data.get('phone')
-        staff_pin = request.data.get('password')  # password field contains the PIN
+        password = request.data.get('password')
 
-        if not phone or not staff_pin:
+        if not phone or not password:
             return Response(
-                {'detail': 'Phone and password (PIN) are required'},
+                {'detail': 'Phone and password are required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -70,16 +72,15 @@ class LoginView(APIView):
         except Staff.DoesNotExist:
             logger.warning(f"Login failed: staff not found for phone {phone}")
             return Response(
-                {'detail': 'Invalid phone or PIN'},
+                {'detail': 'Invalid phone or password'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        from django.contrib.auth.hashers import check_password
-        # Validate PIN (direct string comparison, no hashing)
-        if not check_password(staff_pin, staff.staff_pin):
-            logger.warning(f"Login failed: invalid PIN for staff {staff.id}")
+        # Validate against staff.password (AbstractBaseUser field)
+        if not staff.check_password(password):
+            logger.warning(f"Login failed: invalid password for staff {staff.id}")
             return Response(
-                {'detail': 'Invalid phone or PIN'},
+                {'detail': 'Invalid phone or password'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
@@ -104,7 +105,6 @@ class LoginView(APIView):
             'name': staff.name,
             'phone': staff.phone,
             'role': staff.role,
-            'staffPin': staff.staff_pin,
             'outletId': str(staff.outlet.id),
             'organizationId': str(org.id) if org else None,
             'isSuperAdmin': staff.role == 'super_admin',
@@ -158,7 +158,6 @@ class StaffMeView(APIView):
             'name': staff.name,
             'phone': staff.phone,
             'role': staff.role,
-            'staffPin': staff.staff_pin,
             'outletId': str(staff.outlet.id),
             'organizationId': str(org.id) if org else None,
             'isSuperAdmin': staff.role == 'super_admin',
@@ -283,13 +282,22 @@ class CustomerDetailView(APIView):
         """Get customer details by ID."""
         outlet_id = request.query_params.get('outletId')
 
-        try:
-            outlet = Outlet.objects.get(id=outlet_id)
-        except Outlet.DoesNotExist:
-            return Response(
-                {'detail': f'Outlet {outlet_id} not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        if outlet_id:
+            try:
+                outlet = Outlet.objects.get(id=outlet_id)
+            except Outlet.DoesNotExist:
+                return Response(
+                    {'detail': f'Outlet {outlet_id} not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            # Fall back to the outlet from the authenticated user's JWT
+            outlet = getattr(request.user, 'outlet', None)
+            if outlet is None:
+                return Response(
+                    {'detail': 'outletId is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         try:
             customer = Customer.objects.get(id=customer_id, outlet=outlet)
@@ -337,17 +345,54 @@ class CustomerDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Update allowed fields
-        allowed_fields = ['name', 'phone', 'address', 'dob', 'gstin', 'fixed_discount', 'credit_limit', 'is_chronic']
-        for field in allowed_fields:
-            camel_field = {
-                'fixed_discount': 'fixedDiscount',
-                'credit_limit': 'creditLimit',
-                'is_chronic': 'isChronic'
-            }.get(field, field)
+        # Validate and apply fields
+        if 'name' in request.data:
+            name = (request.data['name'] or '').strip()
+            if not name:
+                return Response({'detail': 'name is required'}, status=status.HTTP_400_BAD_REQUEST)
+            customer.name = name
 
-            if camel_field in request.data:
-                setattr(customer, field, request.data[camel_field])
+        if 'phone' in request.data:
+            phone = (request.data['phone'] or '').strip()
+            if not re.match(r'^[6-9]\d{9}$', phone):
+                return Response(
+                    {'detail': 'phone must be a valid 10-digit Indian mobile number starting with 6-9'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            customer.phone = phone
+
+        if 'gstin' in request.data:
+            gstin = (request.data['gstin'] or '').strip().upper() or None
+            if gstin and not re.match(r'^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$', gstin):
+                return Response({'detail': 'gstin format is invalid'}, status=status.HTTP_400_BAD_REQUEST)
+            customer.gstin = gstin
+
+        if 'creditLimit' in request.data:
+            try:
+                credit_limit = float(request.data['creditLimit'])
+                if credit_limit < 0:
+                    raise ValueError
+                customer.credit_limit = credit_limit
+            except (TypeError, ValueError):
+                return Response({'detail': 'creditLimit must be a non-negative number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'fixedDiscount' in request.data:
+            try:
+                fixed_discount = float(request.data['fixedDiscount'])
+                if not (0 <= fixed_discount <= 100):
+                    raise ValueError
+                customer.fixed_discount = fixed_discount
+            except (TypeError, ValueError):
+                return Response({'detail': 'fixedDiscount must be between 0 and 100'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'address' in request.data:
+            customer.address = request.data['address'] or None
+
+        if 'dob' in request.data:
+            customer.dob = request.data['dob'] or None
+
+        if 'isChronic' in request.data:
+            customer.is_chronic = bool(request.data['isChronic'])
 
         customer.save()
         logger.info(f"Updated customer {customer_id}")
@@ -449,10 +494,44 @@ class CustomerListView(APIView):
     def post(self, request, *args, **kwargs):
         """Create a new customer."""
         outlet_id = request.data.get('outletId')
-        name = request.data.get('name')
-        phone = request.data.get('phone')
-        address = request.data.get('address')
-        dob = request.data.get('dob')
+        name = (request.data.get('name') or '').strip()
+        phone = (request.data.get('phone') or '').strip()
+        address = request.data.get('address') or None
+        dob = request.data.get('dob') or None
+        gstin = (request.data.get('gstin') or '').strip().upper() or None
+        is_chronic = bool(request.data.get('isChronic', False))
+        fixed_discount = request.data.get('fixedDiscount', 0)
+        credit_limit = request.data.get('creditLimit', 0)
+
+        # Validate required fields
+        if not name:
+            return Response({'detail': 'name is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not phone:
+            return Response({'detail': 'phone is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not re.match(r'^[6-9]\d{9}$', phone):
+            return Response(
+                {'detail': 'phone must be a valid 10-digit Indian mobile number starting with 6-9'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if gstin and not re.match(r'^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$', gstin):
+            return Response({'detail': 'gstin format is invalid'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            credit_limit = float(credit_limit)
+            if credit_limit < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response({'detail': 'creditLimit must be a non-negative number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            fixed_discount = float(fixed_discount)
+            if not (0 <= fixed_discount <= 100):
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response({'detail': 'fixedDiscount must be between 0 and 100'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Validate outlet
         try:
@@ -464,14 +543,25 @@ class CustomerListView(APIView):
             )
 
         # Create customer
-        customer = Customer.objects.create(
-            outlet=outlet,
-            name=name,
-            phone=phone,
-            address=address,
-            dob=dob if dob else None,
-            is_active=True,
-        )
+        from django.db import IntegrityError
+        try:
+            customer = Customer.objects.create(
+                outlet=outlet,
+                name=name,
+                phone=phone,
+                address=address,
+                dob=dob,
+                gstin=gstin,
+                is_chronic=is_chronic,
+                fixed_discount=fixed_discount,
+                credit_limit=credit_limit,
+                is_active=True,
+            )
+        except IntegrityError:
+            return Response(
+                {'detail': 'A customer with this phone number already exists in your outlet.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         logger.info(f"Created customer {customer.id} ({customer.name}) for outlet {outlet.name}")
 
@@ -578,7 +668,7 @@ class StaffListView(APIView):
     Used by attendance components to display staff roster.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminStaff]
 
     def get(self, request, *args, **kwargs):
         outlet_id = request.query_params.get('outletId')
@@ -809,7 +899,7 @@ def _serialize_staff(s):
 
 class StaffCreateView(APIView):
     """POST /api/v1/staff/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminStaff]
 
     def post(self, request, *args, **kwargs):
         from django.contrib.auth.hashers import make_password
@@ -823,6 +913,10 @@ class StaffCreateView(APIView):
         if role not in valid_roles:
             return Response({'error': f'Invalid role. Must be one of: {valid_roles}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        password = request.data.get('password', '')
+        if not password:
+            return Response({'error': 'password is required'}, status=status.HTTP_400_BAD_REQUEST)
+
         pin = request.data.get('pin', '')
         if not pin:
             return Response({'error': 'pin is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -833,12 +927,12 @@ class StaffCreateView(APIView):
 
         staff = Staff.objects.create_user(
             phone=phone,
-            password=make_password(pin),
+            password=password,          # app login password (create_user calls set_password internally)
             name=request.data.get('name', ''),
             role=role,
             outlet=outlet,
             email=request.data.get('email'),
-            staff_pin=make_password(pin),  # store hashed PIN for kiosk auth
+            staff_pin=make_password(pin),  # billing counter PIN (stored separately)
             max_discount=request.data.get('maxDiscount', 0),
             can_edit_rate=request.data.get('canEditRate', False),
             can_view_purchase_rates=request.data.get('canViewPurchaseRates', False),
@@ -851,7 +945,7 @@ class StaffCreateView(APIView):
 
 class StaffDetailView(APIView):
     """PATCH/DELETE /api/v1/staff/{pk}/"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminStaff]
 
     def patch(self, request, pk, *args, **kwargs):
         from django.contrib.auth.hashers import make_password
@@ -881,10 +975,11 @@ class StaffDetailView(APIView):
             if field in request.data:
                 setattr(staff, field, request.data[field])
 
-        if 'pin' in request.data:
-            new_pin = str(request.data['pin'])
-            staff.staff_pin = make_password(new_pin)
-            staff.set_password(make_password(new_pin))
+        if 'password' in request.data and request.data['password']:
+            staff.set_password(str(request.data['password']))
+
+        if 'pin' in request.data and request.data['pin']:
+            staff.staff_pin = make_password(str(request.data['pin']))
 
         staff.save()
         return Response({'success': True, 'data': _serialize_staff(staff)}, status=status.HTTP_200_OK)
@@ -1195,7 +1290,7 @@ class DoctorListCreateView(APIView):
         qs = Doctor.objects.filter(outlet=outlet, is_active=True)
         search = request.query_params.get('search', '').strip()
         if search:
-            qs = qs.filter(name__icontains=search)
+            qs = qs.filter(Q(name__icontains=search) | Q(registration_no__icontains=search))
 
         data = [{
             'id': str(d.id),

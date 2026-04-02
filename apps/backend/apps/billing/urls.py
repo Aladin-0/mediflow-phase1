@@ -4,7 +4,7 @@ from apps.billing.views import (
     CustomerCreditPaymentView,
     CreditAccountListView, CreditAccountDetailView,
     DashboardDailyView, SalePrintView,
-    SaleDetailView, CreditTransactionListView, CreditLedgerView,
+    SaleDetailView, SaleItemsView, CreditTransactionListView, CreditLedgerView,
     # Phase 2
     ReceiptListCreateView,
     UpdateCreditLimitView,
@@ -15,6 +15,7 @@ from apps.billing.views import (
     CustomerLedgerView,
     SendReminderView,
     NextInvoiceNumberView,
+    SaleInvoiceSearchView,
 )
 
 # Create a combined view that handles both GET and POST
@@ -27,12 +28,15 @@ class SalesView(SaleListView, SaleCreateView):
 
 urlpatterns = [
     path('invoice-number/', NextInvoiceNumberView.as_view(), name='invoice-number'),
+    # Invoice search (must be before generic sales/<uuid>/)
+    path('sales/invoices/search/', SaleInvoiceSearchView.as_view(), name='sale-invoice-search'),
     # Sales returns (specific paths before generic sales/)
     path('sales/returns/<uuid:pk>/print/', SalesReturnPrintView.as_view(), name='sales-return-print'),
     path('sales/returns/<uuid:pk>/', SalesReturnDetailView.as_view(), name='sales-return-detail'),
     path('sales/returns/', SalesReturnListView.as_view(), name='sales-return-list'),
     path('sales/return/', CreateSalesReturnView.as_view(), name='sales-return-create'),
     path('sales/<uuid:sale_id>/print/', SalePrintView.as_view(), name='sale-print'),
+    path('sales/<uuid:sale_id>/items/', SaleItemsView.as_view(), name='sale-items'),
     path('sales/<uuid:sale_id>/', SaleDetailView.as_view(), name='sale-detail'),
     path('sales/', SalesView.as_view(), name='sale-list-create'),
     # Credit

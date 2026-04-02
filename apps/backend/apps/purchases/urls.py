@@ -9,6 +9,7 @@ from apps.purchases.views import (
     PurchaseDetailView,
     PaymentListView,
     DistributorOutstandingView,
+    PurchaseInvoiceSearchView,
 )
 
 
@@ -31,6 +32,7 @@ class PaymentListCreateView(PaymentListView, DistributorPaymentView):
 
 
 urlpatterns = [
+    path('invoices/search/', PurchaseInvoiceSearchView.as_view(), name='purchase-invoice-search'),
     path('', PurchasesView.as_view(), name='purchase-list-create'),
     path('payments/', PaymentListCreateView.as_view(), name='distributor-payment'),
     path('distributors/<uuid:pk>/outstanding/', DistributorOutstandingView.as_view(), name='distributor-outstanding'),

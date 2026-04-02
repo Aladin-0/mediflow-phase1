@@ -102,7 +102,7 @@ export default function LoginForm() {
                             <Input
                                 id="password"
                                 type={showPassword ? "text" : "password"}
-                                placeholder="••••••••"
+                                placeholder="Enter your password"
                                 autoComplete="current-password"
                                 className={cn("pl-10 pr-10 text-base sm:text-sm", errors.password && "border-red-500 focus-visible:ring-red-500")}
                                 aria-invalid={!!errors.password}
@@ -136,7 +136,7 @@ export default function LoginForm() {
                     </Button>
 
                     <a href="#" className="text-sm text-primary hover:underline text-center mt-4 block">
-                        Forgot your PIN?
+                        Forgot your password?
                     </a>
 
                 </form>

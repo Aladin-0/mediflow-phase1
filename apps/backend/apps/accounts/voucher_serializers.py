@@ -44,6 +44,43 @@ class LedgerSerializer(serializers.ModelSerializer):
             'linkedDistributorId': str(instance.linked_distributor_id) if instance.linked_distributor_id else None,
             'isSystem': instance.is_system,
             'createdAt': instance.created_at.isoformat(),
+            # Contact
+            'station': instance.station,
+            'mailTo': instance.mail_to,
+            'contactPerson': instance.contact_person,
+            'designation': instance.designation,
+            'phoneOffice': instance.phone_office,
+            'phoneResidence': instance.phone_residence,
+            'faxNo': instance.fax_no,
+            'website': instance.website,
+            'email': instance.email,
+            'pincode': instance.pincode,
+            # Compliance
+            'freezeUpto': str(instance.freeze_upto) if instance.freeze_upto else None,
+            'dlNo': instance.dl_no,
+            'dlExpiry': str(instance.dl_expiry) if instance.dl_expiry else None,
+            'vatNo': instance.vat_no,
+            'vatExpiry': str(instance.vat_expiry) if instance.vat_expiry else None,
+            'stNo': instance.st_no,
+            'stExpiry': str(instance.st_expiry) if instance.st_expiry else None,
+            'foodLicenceNo': instance.food_licence_no,
+            'foodLicenceExpiry': str(instance.food_licence_expiry) if instance.food_licence_expiry else None,
+            'extraHeadingNo': instance.extra_heading_no,
+            'extraHeadingExpiry': str(instance.extra_heading_expiry) if instance.extra_heading_expiry else None,
+            'panNo': instance.pan_no,
+            'itPanNo': instance.it_pan_no,
+            # GST / Tax
+            'gstHeading': instance.gst_heading,
+            'billExport': instance.bill_export,
+            'ledgerType': instance.ledger_type,
+            # Settings
+            'balancingMethod': instance.balancing_method,
+            'ledgerCategory': instance.ledger_category,
+            'state': instance.state,
+            'country': instance.country,
+            'color': instance.color,
+            'isHidden': instance.is_hidden,
+            'retailioId': instance.retailio_id,
         }
 
 

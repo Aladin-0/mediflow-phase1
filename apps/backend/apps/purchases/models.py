@@ -23,6 +23,7 @@ class Distributor(models.Model):
     name = models.CharField(max_length=255)
     gstin = models.CharField(max_length=15, null=True, blank=True, unique=True)
     drug_license_no = models.CharField(max_length=100, null=True, blank=True)
+    food_license_no = models.CharField(max_length=50, null=True, blank=True)
     phone = models.CharField(max_length=20)
     email = models.EmailField(null=True, blank=True)
     address = models.TextField()

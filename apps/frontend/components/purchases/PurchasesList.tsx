@@ -14,6 +14,7 @@ import { PurchaseSummaryCards } from './PurchaseSummaryCards';
 import { usePurchasesList } from '@/hooks/usePurchases';
 import { PurchaseInvoiceFull } from '@/types';
 import { cn } from '@/lib/utils';
+import { getPurchaseStatus, STATUS_CONFIG } from '@/lib/purchaseUtils';
 
 /* ─── helpers ─────────────────────────────────────────────── */
 
@@ -22,21 +23,6 @@ const formatINR = (n: number) =>
 
 type StatusFilter = 'all' | 'paid' | 'partial' | 'unpaid' | 'overdue';
 type PeriodFilter = 'this_week' | 'this_month' | 'last_month' | 'all';
-
-function getPurchaseStatus(inv: PurchaseInvoiceFull): 'paid' | 'partial' | 'unpaid' | 'overdue' {
-    const today = new Date().toISOString().split('T')[0];
-    if (inv.outstanding <= 0) return 'paid';
-    if (inv.dueDate && inv.dueDate < today) return 'overdue';
-    if (inv.amountPaid > 0) return 'partial';
-    return 'unpaid';
-}
-
-const STATUS_CONFIG: Record<string, { label: string; classes: string }> = {
-    paid:    { label: 'Paid',    classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-    partial: { label: 'Partial', classes: 'bg-amber-50  text-amber-700  border-amber-200'   },
-    unpaid:  { label: 'Unpaid',  classes: 'bg-slate-100 text-slate-600  border-slate-200'   },
-    overdue: { label: 'Overdue', classes: 'bg-red-50    text-red-700    border-red-200'     },
-};
 
 const PAGE_SIZE = 10;
 
