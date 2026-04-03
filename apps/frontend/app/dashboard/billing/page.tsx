@@ -196,13 +196,13 @@ export default function BillingPage() {
 
                 {/* Right: Cart panel (desktop only) */}
                 <div className="hidden lg:block w-96 shrink-0 bg-white shadow-xl z-10">
-                    <BillingCart onProceedToPayment={initiateCheckout} />
+                    <BillingCart onProceedToPayment={initiateCheckout} onAddDoctorDetails={() => setShowScheduleH(true)} />
                 </div>
             </div>
 
             {/* Mobile cart FAB */}
             <div className="lg:hidden">
-                <MobileCartFAB onProceedToPayment={initiateCheckout} />
+                <MobileCartFAB onProceedToPayment={initiateCheckout} onAddDoctorDetails={() => setShowScheduleH(true)} />
             </div>
 
             {/* Keyboard Shortcuts Overlay */}

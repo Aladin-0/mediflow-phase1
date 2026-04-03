@@ -131,6 +131,84 @@ class LoginView(APIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+class SwitchOutletView(APIView):
+    """
+    POST /api/v1/auth/switch-outlet/
+
+    Switch the active outlet context for a Super Admin.
+    Validates organization constraints and updates the default Session outlet.
+    Returns a new set of JWT access + refresh tokens.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        staff = request.user
+        new_outlet_id = request.data.get('outletId')
+
+        if not new_outlet_id:
+            return Response(
+                {'detail': 'outletId is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if staff.role != 'super_admin':
+            return Response(
+                {'detail': 'Only Super Admins can switch global outlet contexts'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            # Must belong to the exact same organization as the staff's current default
+            org_id = staff.outlet.organization_id
+            new_outlet = Outlet.objects.get(id=new_outlet_id, organization_id=org_id)
+        except Outlet.DoesNotExist:
+            return Response(
+                {'detail': 'Requested outlet not found within your organization'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Update staff active outlet context and issue new token
+        staff.outlet = new_outlet
+        staff.save(update_fields=['outlet'])
+
+        logger.info(f"Staff {staff.id} switched context to Outlet {new_outlet.name}")
+
+        refresh = RefreshToken.for_user(staff)
+        access = refresh.access_token
+
+        org = staff.outlet.organization
+        user_data = {
+            'id': str(staff.id),
+            'name': staff.name,
+            'phone': staff.phone,
+            'role': staff.role,
+            'outletId': str(staff.outlet.id),
+            'organizationId': str(org.id) if org else None,
+            'isSuperAdmin': staff.role == 'super_admin',
+            'outlet': {
+                'id': str(staff.outlet.id),
+                'name': staff.outlet.name,
+                'city': staff.outlet.city,
+                'state': staff.outlet.state,
+            },
+            'avatarUrl': staff.avatar_url,
+            'maxDiscount': float(staff.max_discount),
+            'canEditRate': staff.can_edit_rate,
+            'canViewPurchaseRates': staff.can_view_purchase_rates,
+            'canCreatePurchases': staff.can_create_purchases,
+            'canAccessReports': staff.can_access_reports,
+        }
+
+        response_data = {
+            'access': str(access),
+            'refresh': str(refresh),
+            'user': user_data,
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
 class StaffMeView(APIView):
     """
     GET /api/v1/auth/me/
@@ -909,7 +987,15 @@ class StaffCreateView(APIView):
         if caller.role not in ('super_admin', 'admin'):
             return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
-        outlet = caller.outlet
+        # Use outletId from request if provided (super admin creating staff in another outlet)
+        request_outlet_id = request.data.get('outletId')
+        if request_outlet_id and caller.role == 'super_admin':
+            try:
+                outlet = Outlet.objects.get(id=request_outlet_id, organization=caller.outlet.organization)
+            except Outlet.DoesNotExist:
+                return Response({'error': 'Outlet not found within your organization'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            outlet = caller.outlet
         valid_roles = ('super_admin', 'admin', 'manager', 'billing_staff', 'view_only')
         role = request.data.get('role', 'billing_staff')
         if role not in valid_roles:
@@ -956,7 +1042,10 @@ class StaffDetailView(APIView):
             return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
-            staff = Staff.objects.get(id=pk, outlet=caller.outlet)
+            if caller.role == 'super_admin':
+                staff = Staff.objects.get(id=pk, outlet__organization=caller.outlet.organization)
+            else:
+                staff = Staff.objects.get(id=pk, outlet=caller.outlet)
         except Staff.DoesNotExist:
             return Response({'detail': 'Staff not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -992,7 +1081,10 @@ class StaffDetailView(APIView):
             return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
-            staff = Staff.objects.get(id=pk, outlet=caller.outlet)
+            if caller.role == 'super_admin':
+                staff = Staff.objects.get(id=pk, outlet__organization=caller.outlet.organization)
+            else:
+                staff = Staff.objects.get(id=pk, outlet=caller.outlet)
         except Staff.DoesNotExist:
             return Response({'detail': 'Staff not found'}, status=status.HTTP_404_NOT_FOUND)
 

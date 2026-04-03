@@ -16,9 +16,10 @@ const diffInDays = (dateStr: string) => Math.floor((new Date(dateStr).getTime() 
 
 interface BillingCartProps {
     onProceedToPayment?: () => void
+    onAddDoctorDetails?: () => void
 }
 
-export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
+export function BillingCart({ onProceedToPayment, onAddDoctorDetails }: BillingCartProps = {}) {
     const {
         cart,
         customerLedger,
@@ -249,6 +250,7 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
                         <ScheduleHAlert 
                             hasScheduleH={totals.hasScheduleH} 
                             requiresDoctorDetails={totals.requiresDoctorDetails} 
+                            onAddDoctorDetails={onAddDoctorDetails}
                         />
                     </div>
                 )}
@@ -368,7 +370,7 @@ export function BillingCart({ onProceedToPayment }: BillingCartProps = {}) {
     )
 }
 
-export function MobileCartFAB({ onProceedToPayment }: BillingCartProps = {}) {
+export function MobileCartFAB({ onProceedToPayment, onAddDoctorDetails }: BillingCartProps = {}) {
     const { cartCount, isCartOpen, toggleCart } = useBillingStore()
     const count = cartCount()
 
@@ -395,7 +397,7 @@ export function MobileCartFAB({ onProceedToPayment }: BillingCartProps = {}) {
                 {/* Visual indicator handle */}
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-slate-200 rounded-full z-50 pointer-events-none" />
                 <div className="h-full pt-4">
-                    <BillingCart onProceedToPayment={onProceedToPayment} />
+                    <BillingCart onProceedToPayment={onProceedToPayment} onAddDoctorDetails={onAddDoctorDetails} />
                 </div>
             </SheetContent>
         </Sheet>

@@ -1,10 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { purchasesApi, distributorsApi } from '@/lib/apiClient';
 import { CreatePurchasePayload, PaginatedResponse, PurchaseInvoiceFull } from '@/types';
-import { useAuthStore } from '@/store/authStore';
+import { useOutletId } from '@/hooks/useOutletId';
 
 export function usePurchasesList(filters?: any) {
-    const outletId = useAuthStore((s) => s.user?.outletId);
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['purchases', outletId, filters],
         queryFn: () => purchasesApi.list(outletId!, filters),
@@ -17,7 +17,7 @@ export function usePurchasesList(filters?: any) {
 export const usePurchaseList = usePurchasesList;
 
 export function usePurchaseById(id: string) {
-    const outletId = useAuthStore((s) => s.user?.outletId);
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['purchases', id, outletId],
         queryFn: () => purchasesApi.getById(id, outletId!),
@@ -50,7 +50,7 @@ export function useRecordPayment() {
 }
 
 export function useDistributors() {
-    const outletId = useAuthStore((s) => s.user?.outletId);
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['distributors', outletId],
         queryFn: () => distributorsApi.list(outletId!),
@@ -84,7 +84,7 @@ export function useUpdateDistributor() {
 }
 
 export function useDistributorHistory(distributorId: string | null) {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery<PaginatedResponse<PurchaseInvoiceFull>>({
         queryKey: ['purchases', 'distributor', distributorId],
         queryFn: () => purchasesApi.list(outletId, { distributorId: distributorId! }),

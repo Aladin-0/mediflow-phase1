@@ -22,6 +22,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { PurchaseItemRow } from './PurchaseItemRow';
 import { AddNewProductDrawer } from './AddNewProductDrawer';
 import { PurchaseItemFormData, ProductSearchResult, Ledger } from '@/types';
+import { useOutletId } from '@/hooks/useOutletId';
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ const isNearExpiry = (exp: string) =>
 
 export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     const { toast }   = useToast();
-    const outletId    = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId    = useOutletId();
     const outlet      = useAuthStore((s) => s.outlet);
     const user        = useAuthStore((s) => s.user);
     const gstType     = useSettingsStore((s) => s.gstType);

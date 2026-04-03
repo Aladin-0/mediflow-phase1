@@ -1,10 +1,12 @@
+'use client';
+
 import { useQuery } from '@tanstack/react-query';
-import { useAuthStore } from '@/store/authStore';
+import { useOutletId } from '@/hooks/useOutletId';
 import { salesApi } from '@/lib/apiClient';
-import { SaleInvoiceSummary, SaleItemDetail } from '@/types';
+import { SaleInvoiceSummary, SaleItemDetail, SaleInvoice, PaginatedResponse } from '@/types';
 
 export function useCustomerInvoices(customerId: string) {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery<{ data: SaleInvoiceSummary[] }>({
         queryKey: ['sales', 'customer', customerId, outletId],
         queryFn: () => salesApi.listByCustomer(outletId, customerId),
@@ -19,5 +21,39 @@ export function useInvoiceItems(invoiceId: string | null) {
         queryFn: () => salesApi.getItems(invoiceId!),
         enabled: !!invoiceId,
         staleTime: 300_000,
+    });
+}
+
+export interface SalesFilters {
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    pageSize?: number;
+    search?: string;
+}
+
+export function useSalesList(filters?: SalesFilters) {
+    const outletId = useOutletId();
+    return useQuery<PaginatedResponse<SaleInvoice>>({
+        queryKey: ['sales', 'list', outletId, filters],
+        queryFn: () => salesApi.list(outletId, {
+            page: filters?.page ?? 1,
+            pageSize: filters?.pageSize ?? 50,
+            startDate: filters?.startDate,
+            endDate: filters?.endDate,
+            search: filters?.search,
+        }),
+        enabled: !!outletId,
+        staleTime: 30_000,
+    });
+}
+
+export function useSaleById(saleId: string | null) {
+    const outletId = useOutletId();
+    return useQuery<SaleInvoice>({
+        queryKey: ['sales', 'detail', saleId, outletId],
+        queryFn: () => salesApi.getById(saleId!, outletId),
+        enabled: !!saleId && !!outletId,
+        staleTime: 60_000,
     });
 }

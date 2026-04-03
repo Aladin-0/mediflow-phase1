@@ -4,9 +4,10 @@ import { cn } from '@/lib/utils'
 interface ScheduleHAlertProps {
     hasScheduleH: boolean
     requiresDoctorDetails: boolean
+    onAddDoctorDetails?: () => void
 }
 
-export function ScheduleHAlert({ hasScheduleH, requiresDoctorDetails }: ScheduleHAlertProps) {
+export function ScheduleHAlert({ hasScheduleH, requiresDoctorDetails, onAddDoctorDetails }: ScheduleHAlertProps) {
     if (!hasScheduleH && !requiresDoctorDetails) return null
 
     if (requiresDoctorDetails) {
@@ -16,7 +17,11 @@ export function ScheduleHAlert({ hasScheduleH, requiresDoctorDetails }: Schedule
                 <div>
                     <h4 className="font-semibold text-red-800 text-sm">Cart contains Schedule H1/X/Narcotic drugs</h4>
                     <p className="text-xs text-red-600 mt-1">Doctor details REQUIRED to save this bill</p>
-                    <button className="mt-2 text-xs font-semibold text-red-700 bg-red-100 hover:bg-red-200 rounded px-2 py-1 transition-colors">
+                    <button 
+                        type="button"
+                        onClick={onAddDoctorDetails}
+                        className="mt-2 text-xs font-semibold text-red-700 bg-red-100 hover:bg-red-200 rounded px-2 py-1 transition-colors"
+                    >
                         Add Doctor Details →
                     </button>
                 </div>

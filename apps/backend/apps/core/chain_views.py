@@ -82,6 +82,76 @@ class OrganizationDetailView(APIView):
         })
 
 
+class OrganizationOutletListView(APIView):
+    """
+    GET /api/v1/organizations/<org_id>/outlets/ — list outlets for an organization.
+    POST /api/v1/organizations/<org_id>/outlets/ — create an outlet for the organization.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, org_id):
+        if request.user.role != 'super_admin':
+            return Response({'success': False, 'error': 'Super admin only'}, status=status.HTTP_403_FORBIDDEN)
+            
+        org = get_object_or_404(Organization, id=org_id, is_active=True)
+        outlets = Outlet.objects.filter(organization=org, is_active=True).values(
+            'id', 'name', 'city', 'state', 'gstin', 'phone'
+        )
+        
+        data = [
+            {
+                'id': str(o['id']),
+                'name': o['name'],
+                'city': o['city'],
+                'state': o['state'],
+                'gstin': o['gstin'],
+                'phone': o['phone'],
+            }
+            for o in outlets
+        ]
+        return Response({'success': True, 'data': data})
+
+    def post(self, request, org_id):
+        if request.user.role != 'super_admin':
+            return Response({'success': False, 'error': 'Super admin only'}, status=status.HTTP_403_FORBIDDEN)
+            
+        org = get_object_or_404(Organization, id=org_id, is_active=True)
+        
+        # Check uniqueness manually to provide clean error messages
+        gstin = request.data.get('gstin', '')
+        drug_license_no = request.data.get('drug_license_no', '')
+        
+        if Outlet.objects.filter(gstin=gstin).exists():
+            return Response({'success': False, 'error': 'An outlet with this GSTIN already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if Outlet.objects.filter(drug_license_no=drug_license_no).exists():
+            return Response({'success': False, 'error': 'An outlet with this Drug License Number already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            outlet = Outlet.objects.create(
+                organization=org,
+                name=request.data.get('name', ''),
+                address=request.data.get('address', ''),
+                city=request.data.get('city', ''),
+                state=request.data.get('state', ''),
+                pincode=request.data.get('pincode', ''),
+                gstin=gstin,
+                drug_license_no=drug_license_no,
+                phone=request.data.get('phone', ''),
+            )
+            return Response({
+                'success': True, 
+                'data': {
+                    'id': str(outlet.id),
+                    'name': outlet.name
+                }
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"Error creating outlet: {str(e)}")
+            return Response({'success': False, 'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 class ChainDashboardView(APIView):
     """
     GET /api/v1/organizations/dashboard/?orgId=<uuid>&from=YYYY-MM-DD&to=YYYY-MM-DD

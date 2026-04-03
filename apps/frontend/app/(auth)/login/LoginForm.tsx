@@ -42,6 +42,11 @@ export default function LoginForm() {
                 useAuthStore.getState().setOutlet(response.user.outlet)
             }
 
+            // Sync selectedOutletId to the logged-in user's outlet
+            // This clears any stale selectedOutletId from a previous session/user
+            const { useSettingsStore } = await import('@/store/settingsStore')
+            useSettingsStore.getState().setOutletId(response.user.outletId)
+
             // Set JWT access token as a cookie so middleware can detect authentication
             document.cookie = `access_token=${response.access}; path=/; max-age=86400; SameSite=Lax`
 

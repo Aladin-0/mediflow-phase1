@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { RefreshCw, Scale, CheckCircle, XCircle } from 'lucide-react';
 import { accountsApi } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -36,8 +37,9 @@ interface TrialBalanceResponse {
 }
 
 export default function TrialBalancePage() {
-    const user = useAuthStore((s) => s.user);
-    const outletId = user?.outletId ?? '';
+    const { outlet } = useAuthStore();
+    const { selectedOutletId } = useSettingsStore();
+    const outletId = selectedOutletId ?? outlet?.id ?? '';
 
     const { data, isLoading, isError, refetch } = useQuery<TrialBalanceResponse>({
         queryKey: ['trial-balance', outletId],

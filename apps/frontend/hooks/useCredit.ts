@@ -3,10 +3,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { creditApi } from '@/lib/apiClient';
 import { RecordCreditPaymentPayload } from '@/types';
-import { useAuthStore } from '@/store/authStore';
+import { useOutletId } from '@/hooks/useOutletId';
 
 export function useCreditAccounts(filters?: any) {
-    const outletId = useAuthStore((s) => s.user?.outletId);
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['credit', 'accounts', outletId, filters],
         queryFn: () => creditApi.getAccountsList(outletId!, filters),
@@ -25,7 +25,7 @@ export function useCreditTransactions(accountId: string) {
 }
 
 export function useCreditAgingSummary() {
-    const outletId = useAuthStore((s) => s.user?.outletId);
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['credit', 'aging', outletId],
         queryFn: () => creditApi.getAgingSummary(outletId!),

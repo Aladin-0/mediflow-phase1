@@ -6,6 +6,7 @@ services:
     container_name: mediflow_postgres
     restart: unless-stopped          # ← ADDED
     environment:
+      TZ: Asia/Kolkata
       POSTGRES_DB: mediflow
       POSTGRES_USER: mediflow
       POSTGRES_PASSWORD: mediflow
@@ -24,6 +25,8 @@ services:
     image: redis:7-alpine
     container_name: mediflow_redis
     restart: unless-stopped          # ← ADDED
+    environment:
+      TZ: Asia/Kolkata
     ports:
       - "6379:6379"
     volumes:
@@ -52,6 +55,7 @@ services:
     env_file:
       - ./apps/backend/.env
     environment:
+      TZ: Asia/Kolkata
       DJANGO_SETTINGS_MODULE: mediflow.settings.dev
     depends_on:
       postgres:
@@ -77,6 +81,7 @@ services:
     env_file:
       - ./apps/frontend/.env.local
     environment:
+      - TZ=Asia/Kolkata
       - NODE_ENV=development
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
@@ -86,6 +91,8 @@ services:
   nginx:
     image: nginx:latest
     restart: unless-stopped
+    environment:
+      TZ: Asia/Kolkata
     ports:
       - "80:80"
       - "443:443"
@@ -109,6 +116,7 @@ services:
     env_file:
       - ./apps/backend/.env
     environment:
+      TZ: Asia/Kolkata
       DJANGO_SETTINGS_MODULE: mediflow.settings.dev
     depends_on:
       postgres:

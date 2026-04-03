@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { Scale, Package, Users, ArrowUpCircle, ArrowDownCircle, RefreshCw, TrendingUp } from 'lucide-react';
 import { reportsApi } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
+import { useSettingsStore } from '@/store/settingsStore';
 import { BalanceSheet } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,8 +31,9 @@ function BalanceRow({ label, value, sub, bold }: { label: string; value: number;
 }
 
 export default function BalanceSheetPage() {
-    const user = useAuthStore((s) => s.user);
-    const outletId = user?.outletId ?? '';
+    const { outlet } = useAuthStore();
+    const { selectedOutletId } = useSettingsStore();
+    const outletId = selectedOutletId ?? outlet?.id ?? '';
 
     const { data, isLoading, isError, refetch, dataUpdatedAt } = useQuery<BalanceSheet>({
         queryKey: ['balance-sheet', outletId],

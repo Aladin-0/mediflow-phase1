@@ -1,11 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { format, startOfMonth } from 'date-fns';
-import { Building2, TrendingUp, ShoppingCart, CreditCard, ArrowDownCircle, RefreshCw, AlertTriangle } from 'lucide-react';
-import { chainApi } from '@/lib/apiClient';
+import { Building2, TrendingUp, ShoppingCart, CreditCard, ArrowDownCircle, RefreshCw, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
+import { chainApi, authApi } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
+import { useSettingsStore } from '@/store/settingsStore';
+import { useBillingStore } from '@/store/billingStore';
 import { ChainDashboard, ChainOutletRow } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,6 +15,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { AddOutletModal } from '@/components/chain/AddOutletModal';
 
 const fmt = (n: number) =>
     '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -52,6 +55,30 @@ export default function ChainDashboardPage() {
         staleTime: 1000 * 60 * 2,
     });
 
+    const switchMutation = useMutation({
+        mutationFn: (targetOutletId: string) => authApi.switchOutlet(targetOutletId),
+        onSuccess: (data) => {
+            // 1. Update auth store with new user and outlet
+            useAuthStore.setState({ user: data.user, isAuthenticated: true });
+            useAuthStore.getState().setOutlet(data.user.outlet);
+
+            // 2. Clear selectedOutletId so useOutletId() picks up the new outlet from auth store
+            useSettingsStore.getState().setOutletId(data.user.outletId);
+
+            // 3. Reset billing store to prevent cross-outlet cart leakage
+            useBillingStore.getState().resetBilling();
+
+            // 4. Save new JWT token
+            document.cookie = `access_token=${data.access}; path=/;`;
+
+            // 5. Hard refresh to clear react-query cache and remount layout with new outlet scope
+            window.location.href = '/dashboard';
+        },
+        onError: (err: any) => {
+            alert(err?.detail || 'Failed to switch outlet');
+        }
+    });
+
     if (user?.role !== 'super_admin') {
         return (
             <div className="flex h-64 items-center justify-center">
@@ -85,10 +112,13 @@ export default function ChainDashboardPage() {
                         <p className="text-sm text-slate-500 mt-0.5">{data.organization.name}</p>
                     )}
                 </div>
-                <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
-                    <RefreshCw className={cn('mr-2 h-4 w-4', isLoading && 'animate-spin')} />
-                    Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading}>
+                        <RefreshCw className={cn('mr-2 h-4 w-4', isLoading && 'animate-spin')} />
+                        Refresh
+                    </Button>
+                    <AddOutletModal orgId={orgId} />
+                </div>
             </div>
 
             {/* Date range */}
@@ -168,6 +198,7 @@ export default function ChainDashboardPage() {
                                     <th className="px-5 py-3 text-right text-xs font-medium text-slate-500">Period Sales</th>
                                     <th className="px-5 py-3 text-right text-xs font-medium text-slate-500">Period Invoices</th>
                                     <th className="px-5 py-3 text-right text-xs font-medium text-slate-500">Share</th>
+                                    <th className="px-5 py-3 text-center text-xs font-medium text-slate-500">Action</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100">
@@ -201,12 +232,32 @@ export default function ChainDashboardPage() {
                                                     </span>
                                                 </div>
                                             </td>
+                                            <td className="px-5 py-3 text-center">
+                                                <Button
+                                                    variant={outlet.id === user?.outletId ? "secondary" : "outline"}
+                                                    size="sm"
+                                                    disabled={outlet.id === user?.outletId || switchMutation.isPending}
+                                                    onClick={() => switchMutation.mutate(outlet.id)}
+                                                    className="w-full text-xs h-8"
+                                                >
+                                                    {switchMutation.variables === outlet.id && switchMutation.isPending ? (
+                                                        <Loader2 className="h-3 w-3 animate-spin mx-auto" />
+                                                    ) : outlet.id === user?.outletId ? (
+                                                        <span className="text-slate-500">Current</span>
+                                                    ) : (
+                                                        <>
+                                                            Enter
+                                                            <ArrowRight className="ml-1 h-3 w-3" />
+                                                        </>
+                                                    )}
+                                                </Button>
+                                            </td>
                                         </tr>
                                     );
                                 })}
                                 {(!data?.outlets || data.outlets.length === 0) && (
                                     <tr>
-                                        <td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-400">
+                                        <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-400">
                                             No outlet data available
                                         </td>
                                     </tr>
@@ -228,6 +279,7 @@ export default function ChainDashboardPage() {
                                             {data.totalSales.invoices}
                                         </td>
                                         <td className="px-5 py-3 text-right text-xs text-slate-500">100%</td>
+                                        <td></td>
                                     </tr>
                                 </tfoot>
                             )}

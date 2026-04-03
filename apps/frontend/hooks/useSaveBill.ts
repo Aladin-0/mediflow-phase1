@@ -140,6 +140,8 @@ export function useSaveBill() {
                 customer: (invoice as any).customer ?? savedCustomer ?? undefined,
                 doctorName: savedDoctor?.name ?? savedScheduleH?.doctorName ?? undefined,
                 doctorRegNo: savedDoctor?.regNo ?? savedScheduleH?.doctorRegNo ?? undefined,
+                patientName: savedScheduleH?.patientName ?? undefined,
+                patientAddress: savedScheduleH?.patientAddress ?? undefined,
             };
 
             // On Success (Online or Offline):

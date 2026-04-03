@@ -407,6 +407,9 @@ export interface SaleInvoice {
     createdAt: string;
     doctorName?: string;
     doctorRegNo?: string;
+    patientName?: string;
+    patientAddress?: string;
+    prescriptionNo?: string;
 }
 
 export interface SaleInvoiceSummary {

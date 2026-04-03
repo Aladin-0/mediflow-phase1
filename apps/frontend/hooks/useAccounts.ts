@@ -1,12 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { accountsApi } from '@/lib/apiClient';
 import { CreatePaymentPayload, CreateReceiptPayload, CreateExpensePayload } from '@/types';
+import { useOutletId } from '@/hooks/useOutletId';
 import { useAuthStore } from '@/store/authStore';
 
 // ─── Outstanding ──────────────────────────────────────────────────────────────
 
 export function useDistributorOutstanding() {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['outstanding', 'distributors', outletId],
         queryFn: () => accountsApi.getDistributorOutstanding(outletId),
@@ -16,7 +17,7 @@ export function useDistributorOutstanding() {
 }
 
 export function useCustomerOutstanding() {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['outstanding', 'customers', outletId],
         queryFn: () => accountsApi.getCustomerOutstanding(outletId),
@@ -47,7 +48,7 @@ export function useCustomerUnpaidInvoices(customerId: string) {
 
 export function useCreatePayment() {
     const queryClient = useQueryClient();
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     const userId   = useAuthStore((s) => s.user?.id ?? '');
     return useMutation({
         mutationFn: (payload: CreatePaymentPayload) =>
@@ -62,7 +63,7 @@ export function useCreatePayment() {
 }
 
 export function usePaymentHistory(distributorId?: string) {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['payments', outletId, distributorId],
         queryFn: () => accountsApi.getPayments(outletId, distributorId),
@@ -75,7 +76,7 @@ export function usePaymentHistory(distributorId?: string) {
 
 export function useCreateReceipt() {
     const queryClient = useQueryClient();
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     const userId   = useAuthStore((s) => s.user?.id ?? '');
     return useMutation({
         mutationFn: (payload: CreateReceiptPayload) =>
@@ -89,7 +90,7 @@ export function useCreateReceipt() {
 }
 
 export function useReceiptHistory(customerId?: string) {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['receipts', outletId, customerId],
         queryFn: () => accountsApi.getReceipts(outletId, customerId),
@@ -101,7 +102,7 @@ export function useReceiptHistory(customerId?: string) {
 // ─── Expenses ─────────────────────────────────────────────────────────────────
 
 export function useExpenses(filters: { from?: string; to?: string; head?: string } = {}) {
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     return useQuery({
         queryKey: ['expenses', outletId, filters],
         queryFn: () => accountsApi.getExpenses(outletId, filters),
@@ -112,7 +113,7 @@ export function useExpenses(filters: { from?: string; to?: string; head?: string
 
 export function useCreateExpense() {
     const queryClient = useQueryClient();
-    const outletId = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId = useOutletId();
     const userId   = useAuthStore((s) => s.user?.id ?? '');
     return useMutation({
         mutationFn: (payload: CreateExpensePayload) =>

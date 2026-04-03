@@ -7,6 +7,7 @@ import PaymentPieChart from '@/components/dashboard/PaymentPieChart';
 import TopSellingTable from '@/components/dashboard/TopSellingTable';
 import StaffLeaderboard from '@/components/dashboard/StaffLeaderboard';
 import AlertsRow from '@/components/dashboard/AlertsRow';
+import ProfitAnalysisCard from '@/components/dashboard/ProfitAnalysisCard';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import dynamic from 'next/dynamic';
 
@@ -65,6 +66,9 @@ export default function DashboardPage() {
           </Card>
         </div>
       </div>
+
+      {/* Profit Analysis */}
+      <ProfitAnalysisCard kpi={kpi} isLoading={kpiLoading} />
 
       {/* Table + Leaderboard row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

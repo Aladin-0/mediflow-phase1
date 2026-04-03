@@ -7,10 +7,12 @@ import { PermissionGate } from './PermissionGate';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useAuthStore } from '@/store/authStore';
+import { useBillingStore } from '@/store/billingStore';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { authApi } from '@/lib/apiClient';
+import { authApi, chainApi } from '@/lib/apiClient';
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
 interface HeaderProps {
     onMobileMenuToggle: () => void;
@@ -19,9 +21,24 @@ interface HeaderProps {
 
 export function Header({ onMobileMenuToggle }: HeaderProps) {
     const title = usePageTitle();
-    const { selectedOutletId, setOutletId } = useSettingsStore();
+    const { selectedOutletId } = useSettingsStore();
     const { user, logout } = useAuthStore();
     const [isOnline, setIsOnline] = useState(true);
+    const [isSwitching, setIsSwitching] = useState(false);
+
+    const currentOutletId = selectedOutletId || user?.outlet?.id || '';
+
+    // Fetch all outlets in the organization for super admins
+    const { data: orgOutlets } = useQuery({
+        queryKey: ['org-outlets', user?.organizationId],
+        queryFn: async () => {
+            if (!user?.organizationId) return [];
+            const data = await chainApi.getOrgOutlets(user.organizationId);
+            return data || [];
+        },
+        enabled: !!user?.isSuperAdmin && !!user?.organizationId,
+        staleTime: 1000 * 60 * 10,
+    });
 
     useEffect(() => {
         if (typeof navigator !== 'undefined') {
@@ -36,6 +53,29 @@ export function Header({ onMobileMenuToggle }: HeaderProps) {
             window.removeEventListener('offline', handleOffline);
         };
     }, []);
+
+    const handleOutletSwitch = async (newOutletId: string) => {
+        if (newOutletId === currentOutletId || isSwitching) return;
+        setIsSwitching(true);
+        try {
+            const data = await authApi.switchOutlet(newOutletId);
+
+            // Sync all stores
+            useAuthStore.setState({ user: data.user, isAuthenticated: true });
+            useAuthStore.getState().setOutlet(data.user.outlet);
+            useSettingsStore.getState().setOutletId(data.user.outletId);
+            useBillingStore.getState().resetBilling();
+
+            // Save new JWT token
+            document.cookie = `access_token=${data.access}; path=/;`;
+
+            // Hard refresh to clear all cached data
+            window.location.reload();
+        } catch (err: any) {
+            alert(err?.detail || 'Failed to switch outlet');
+            setIsSwitching(false);
+        }
+    };
 
     const handleLogoutAction = async () => {
         const { handleLogout } = await import('@/lib/auth');
@@ -77,15 +117,27 @@ export function Header({ onMobileMenuToggle }: HeaderProps) {
 
                 <PermissionGate permission="view_all_outlets">
                     <div className="hidden sm:block">
-                        <Select value={selectedOutletId || user?.outlet?.id || ''} onValueChange={setOutletId}>
+                        <Select
+                            value={currentOutletId}
+                            onValueChange={handleOutletSwitch}
+                            disabled={isSwitching}
+                        >
                             <SelectTrigger className="w-full max-w-[180px] h-9 text-sm bg-slate-50 border-slate-200 focus:ring-primary focus:ring-offset-1">
-                                <SelectValue placeholder="Select Outlet" />
+                                <SelectValue placeholder={isSwitching ? "Switching..." : "Select Outlet"} />
                             </SelectTrigger>
                             <SelectContent>
-                                {user?.outlet && (
-                                    <SelectItem value={user.outlet.id}>
-                                        {user.outlet.name}
-                                    </SelectItem>
+                                {orgOutlets && orgOutlets.length > 0 ? (
+                                    orgOutlets.map((o: any) => (
+                                        <SelectItem key={o.id} value={o.id}>
+                                            {o.name}
+                                        </SelectItem>
+                                    ))
+                                ) : (
+                                    user?.outlet && (
+                                        <SelectItem value={user.outlet.id}>
+                                            {user.outlet.name}
+                                        </SelectItem>
+                                    )
                                 )}
                             </SelectContent>
                         </Select>
@@ -128,3 +180,4 @@ export function Header({ onMobileMenuToggle }: HeaderProps) {
         </header>
     );
 }
+

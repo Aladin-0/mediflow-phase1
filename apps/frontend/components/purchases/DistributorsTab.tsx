@@ -23,6 +23,7 @@ import { useAuthStore } from '@/store/authStore';
 import { Distributor, INDIAN_STATES } from '@/types';
 import { cn } from '@/lib/utils';
 import { getPurchaseStatus, STATUS_CONFIG } from '@/lib/purchaseUtils';
+import { useOutletId } from '@/hooks/useOutletId';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -467,7 +468,7 @@ function DistributorCard({
 
 export function DistributorsTab() {
     const { toast }  = useToast();
-    const outletId   = useAuthStore((s) => s.user?.outletId ?? '');
+    const outletId   = useOutletId();
 
     const { data: distributors, isLoading } = useDistributors();
     const createDist = useCreateDistributor();

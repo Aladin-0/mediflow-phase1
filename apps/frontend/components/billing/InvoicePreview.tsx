@@ -67,9 +67,9 @@ export const InvoicePreview = forwardRef<HTMLDivElement, InvoicePreviewProps>(({
     const invoiceFooter = settings.invoiceFooter || outlet?.invoiceFooter || 'Wish You Speedy Recovery';
 
     const customer = (invoice as any).customer;
-    const customerName = customer?.name || 'Cash Customer';
+    const customerName = invoice.patientName || customer?.name || 'Cash Customer';
     const customerPhone = customer?.phone || '—';
-    const customerAddress = customer?.address || '—';
+    const customerAddress = invoice.patientAddress || customer?.address || '—';
 
     const invoiceDate = invoice.invoiceDate || invoice.createdAt;
     const subtotalMRP = invoice.subtotal;

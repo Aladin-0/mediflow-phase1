@@ -40,12 +40,12 @@ function getPeriodBounds(period: PeriodFilter): { start: string; end: string } |
     } else {
         // last_month
         start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        end   = new Date(today.getFullYear(), today.getMonth(), 0);
+        end = new Date(today.getFullYear(), today.getMonth(), 0);
     }
 
     return {
-        start: start.toISOString().split('T')[0],
-        end:   end.toISOString().split('T')[0],
+        start: format(start, 'yyyy-MM-dd'),
+        end: format(end, 'yyyy-MM-dd'),
     };
 }
 
@@ -53,11 +53,11 @@ function getPeriodBounds(period: PeriodFilter): { start: string; end: string } |
 
 export function PurchasesList() {
     const { data, isLoading } = usePurchasesList();
-    const [search, setSearch]           = useState('');
+    const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-    const [period, setPeriod]           = useState<PeriodFilter>('this_month');
-    const [expandedId, setExpandedId]   = useState<string | null>(null);
-    const [page, setPage]               = useState(1);
+    const [period, setPeriod] = useState<PeriodFilter>('this_month');
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [page, setPage] = useState(1);
     const [selectedInvoice, setSelectedInvoice] = useState<PurchaseInvoiceFull | null>(null);
 
     const allInvoices: PurchaseInvoiceFull[] = data?.data ?? [];
@@ -88,7 +88,7 @@ export function PurchasesList() {
             if (search.trim()) {
                 const q = search.toLowerCase();
                 const matchInvoice = inv.invoiceNo.toLowerCase().includes(q);
-                const matchDist    = inv.distributor?.name?.toLowerCase().includes(q) ?? false;
+                const matchDist = inv.distributor?.name?.toLowerCase().includes(q) ?? false;
                 if (!matchInvoice && !matchDist) return false;
             }
             return true;
@@ -96,7 +96,7 @@ export function PurchasesList() {
     }, [periodInvoices, search, statusFilter]);
 
     const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-    const paginated  = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
     const resetPage = () => setPage(1);
 
@@ -132,7 +132,7 @@ export function PurchasesList() {
                     {/* Status pills with live counts */}
                     {(['all', 'paid', 'partial', 'unpaid', 'overdue'] as StatusFilter[]).map((s) => {
                         const isActive = statusFilter === s;
-                        const count    = s === 'all' ? periodInvoices.length : statusCounts[s];
+                        const count = s === 'all' ? periodInvoices.length : statusCounts[s];
                         return (
                             <button
                                 key={s}
@@ -227,9 +227,9 @@ export function PurchasesList() {
                                 </tr>
                             ) : (
                                 paginated.map((inv) => {
-                                    const status     = getPurchaseStatus(inv);
+                                    const status = getPurchaseStatus(inv);
                                     const isExpanded = expandedId === inv.id;
-                                    const cfg        = STATUS_CONFIG[status];
+                                    const cfg = STATUS_CONFIG[status];
 
                                     return (
                                         /* ✅ fixed: key on fragment */
@@ -386,10 +386,10 @@ export function PurchasesList() {
                 </div>
             )}
 
-            <PurchaseDetailModal 
-                open={!!selectedInvoice} 
-                onOpenChange={(open) => !open && setSelectedInvoice(null)} 
-                invoice={selectedInvoice} 
+            <PurchaseDetailModal
+                open={!!selectedInvoice}
+                onOpenChange={(open) => !open && setSelectedInvoice(null)}
+                invoice={selectedInvoice}
             />
         </div>
     );

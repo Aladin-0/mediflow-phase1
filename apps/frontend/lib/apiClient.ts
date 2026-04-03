@@ -100,6 +100,42 @@ const realAuthApi = {
     logout: async (): Promise<void> => {
         authToken = null;
     },
+    switchOutlet: async (outletId: string): Promise<{ access: string; refresh: string; user: any }> => {
+        const response = await fetch(`${API_URL}/auth/switch-outlet/`, {
+            method: 'POST',
+            headers: getHeaders(true),
+            body: JSON.stringify({ outletId }),
+        });
+        await assertOk(response);
+        const data = await response.json();
+        authToken = data.access;
+        const u = data.user;
+        return {
+            access: data.access,
+            refresh: data.refresh,
+            user: {
+                id: u.id,
+                name: u.name,
+                phone: u.phone,
+                role: u.role,
+                maxDiscount: u.maxDiscount,
+                canEditRate: u.canEditRate,
+                canViewPurchaseRates: u.canViewPurchaseRates,
+                canCreatePurchases: u.canCreatePurchases,
+                canAccessReports: u.canAccessReports,
+                outletId: u.outletId,
+                organizationId: u.organizationId ?? undefined,
+                isSuperAdmin: u.isSuperAdmin ?? false,
+                outlet: {
+                    ...u.outlet,
+                    id: u.outlet.id,
+                    name: u.outlet.name,
+                    city: u.outlet.city,
+                    state: u.outlet.state,
+                } as any,
+            },
+        };
+    },
     refresh: async (refreshToken: string): Promise<{ access: string }> => {
         const response = await fetch(`${API_URL}/auth/refresh/`, {
             method: 'POST',
@@ -326,6 +362,7 @@ const realSalesApi = {
         if (params?.pageSize) url += `&pageSize=${params.pageSize}`;
         if (params?.startDate) url += `&startDate=${params.startDate}`;
         if (params?.endDate) url += `&endDate=${params.endDate}`;
+        if (params?.search) url += `&search=${encodeURIComponent(params.search)}`;
 
         const response = await fetch(url, { headers: getHeaders() });
         await assertOk(response);
@@ -1174,6 +1211,24 @@ const realChainApi = {
         await assertOk(response);
         const data = await response.json();
         return data.data;
+    },
+    createOutlet: async (orgId: string, data: any) => {
+        const response = await fetch(`${API_URL}/organizations/${orgId}/outlets/`, {
+            method: 'POST',
+            headers: getHeaders(),
+            body: JSON.stringify(data),
+        });
+        await assertOk(response);
+        const res = await response.json();
+        return res.data;
+    },
+    getOrgOutlets: async (orgId: string) => {
+        const response = await fetch(`${API_URL}/organizations/${orgId}/outlets/`, {
+            headers: getHeaders(),
+        });
+        await assertOk(response);
+        const data = await response.json();
+        return data.data || data || [];
     },
 };
 

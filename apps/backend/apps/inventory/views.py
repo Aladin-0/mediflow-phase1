@@ -464,7 +464,15 @@ class InventoryListView(APIView):
         if schedule_type and schedule_type != 'all':
             products = products.filter(schedule_type=schedule_type)
 
-        logger.info(f"Found {products.count()} products matching filters")
+        # CRITICAL: Only show products that have at least one batch at this outlet
+        # Without this, all products are shown globally across outlets
+        products_with_batches_at_outlet = Batch.objects.filter(
+            outlet=outlet,
+            is_active=True,
+        ).values_list('product_id', flat=True).distinct()
+        products = products.filter(id__in=products_with_batches_at_outlet)
+
+        logger.info(f"Found {products.count()} products with stock at outlet {outlet.name}")
 
         # Build ProductSearchResult for each product with batches
         today = timezone.now().date()

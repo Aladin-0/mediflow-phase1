@@ -4,11 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { customersApi, doctorsApi } from '@/lib/apiClient';
 import { CustomerFull, CustomerFilters } from '@/types';
-import { useAuthStore } from '@/store/authStore';
+import { useOutletId } from '@/hooks/useOutletId';
 
-function useOutletId() {
-    return useAuthStore((s) => s.user?.outletId) ?? '';
-}
+// NOTE: useOutletId from hooks/useOutletId.ts respects selectedOutletId from settingsStore
 
 export function useCustomerList(filters?: CustomerFilters) {
     const outletId = useOutletId();

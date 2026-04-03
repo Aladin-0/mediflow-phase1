@@ -18,8 +18,9 @@ export function useStaffList() {
 
 export function useCreateStaff() {
     const queryClient = useQueryClient();
+    const outletId = useOutletId();
     return useMutation({
-        mutationFn: (data: any) => staffApi.create(data),
+        mutationFn: (data: any) => staffApi.create({ ...data, outletId }),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['staff'] });
             toast.success('Staff member created successfully');

@@ -625,16 +625,92 @@ class SaleListView(APIView):
         logger.info(f"Fetching sales invoices for outlet: {outlet.name}")
 
         # Get all invoices for this outlet, ordered by date (newest first)
-        invoices = SaleInvoice.objects.filter(outlet=outlet).annotate(
+        invoices = SaleInvoice.objects.filter(outlet=outlet).prefetch_related('items__batch').annotate(
             items_count=Count('items')
         ).order_by('-invoice_date', '-created_at')
 
-        # Optional customer filter
+        # ── Date range filter (startDate / endDate) ─────────────────────────
+        start_date_str = request.query_params.get('startDate') or request.query_params.get('start_date')
+        end_date_str   = request.query_params.get('endDate')   or request.query_params.get('end_date')
+        try:
+            if start_date_str:
+                from datetime import datetime as dt
+                start_dt = dt.fromisoformat(start_date_str).date()
+                invoices = invoices.filter(invoice_date__date__gte=start_dt)
+                logger.info(f"Filtering sales from {start_dt}")
+            if end_date_str:
+                from datetime import datetime as dt
+                end_dt = dt.fromisoformat(end_date_str).date()
+                invoices = invoices.filter(invoice_date__date__lte=end_dt)
+                logger.info(f"Filtering sales to {end_dt}")
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid date filter: {e}")
+
+        # ── Optional customer filter ─────────────────────────────────────────
         customer_id = request.query_params.get('customerId') or request.query_params.get('customer_id')
         if customer_id:
             invoices = invoices.filter(customer_id=customer_id)
 
-        # Pagination
+        # ── Optional search filter ───────────────────────────────────────────
+        search_q = request.query_params.get('search', '').strip()
+        if search_q:
+            from django.db.models import Q
+            invoices = invoices.filter(
+                Q(invoice_no__icontains=search_q) |
+                Q(customer__name__icontains=search_q) |
+                Q(billed_by__name__icontains=search_q)
+            )
+
+        # ── Profit aggregates for the filtered set ───────────────────────────
+        from django.db.models import Sum as dSum, Count as dCount
+        agg = SaleInvoice.objects.filter(
+            outlet=outlet,
+            **({'invoice_date__date__gte': start_dt} if start_date_str else {}),
+            **({'invoice_date__date__lte': end_dt}   if end_date_str   else {}),
+        ).aggregate(
+            total_revenue=dSum('grand_total'),
+            total_discount=dSum('discount_amount'),
+            total_gst=dSum('cgst_amount') if hasattr(SaleInvoice, 'cgst_amount') else dSum('grand_total'),
+            total_cash=dSum('cash_paid'),
+            total_upi=dSum('upi_paid'),
+            total_card=dSum('card_paid'),
+            total_credit=dSum('credit_given'),
+            total_bills=dCount('id'),
+        )
+
+        # Profit = sale amount - purchase cost for each item
+        from apps.billing.models import SaleItem as SaleItemModel
+        from django.db.models import ExpressionWrapper, FloatField, F as dbF
+        cost_agg = SaleItemModel.objects.filter(
+            invoice__outlet=outlet,
+            **({'invoice__invoice_date__date__gte': start_dt} if start_date_str else {}),
+            **({'invoice__invoice_date__date__lte': end_dt}   if end_date_str   else {}),
+        ).aggregate(
+            total_cost=Sum(
+                ExpressionWrapper(
+                    dbF('batch__purchase_rate') * (dbF('qty_strips') + dbF('qty_loose') * 1.0),
+                    output_field=FloatField()
+                )
+            )
+        )
+
+        total_revenue = float(agg.get('total_revenue') or 0)
+        total_cost    = float(cost_agg.get('total_cost') or 0)
+        total_profit  = total_revenue - total_cost
+
+        analytics = {
+            'totalRevenue': total_revenue,
+            'totalCost': round(total_cost, 2),
+            'totalProfit': round(total_profit, 2),
+            'totalDiscount': float(agg.get('total_discount') or 0),
+            'totalBills': agg.get('total_bills') or 0,
+            'cashCollected': float(agg.get('total_cash') or 0),
+            'upiCollected': float(agg.get('total_upi') or 0),
+            'cardCollected': float(agg.get('total_card') or 0),
+            'creditGiven': float(agg.get('total_credit') or 0),
+        }
+
+        # ── Pagination ───────────────────────────────────────────────────────
         page = int(request.query_params.get('page', 1))
         page_size = min(int(request.query_params.get('pageSize', 50)), 200)
 
@@ -644,7 +720,7 @@ class SaleListView(APIView):
         end_idx = start_idx + page_size
         paginated_invoices = invoices[start_idx:end_idx]
 
-        # Serialize invoices
+        # ── Serialize invoices ───────────────────────────────────────────────
         results = []
         for invoice in paginated_invoices:
             result = {
@@ -653,6 +729,11 @@ class SaleListView(APIView):
                 'invoiceNo': invoice.invoice_no,
                 'invoiceDate': invoice.invoice_date.isoformat(),
                 'customerId': str(invoice.customer.id) if invoice.customer else None,
+                'customer': {
+                    'id': str(invoice.customer.id),
+                    'name': invoice.customer.name,
+                    'phone': getattr(invoice.customer, 'phone', ''),
+                } if invoice.customer else None,
                 'subtotal': float(invoice.subtotal),
                 'discountAmount': float(invoice.discount_amount),
                 'taxableAmount': float(invoice.taxable_amount),
@@ -677,12 +758,22 @@ class SaleListView(APIView):
                 'itemsCount': getattr(invoice, 'items_count', 0),
                 'createdAt': invoice.created_at.isoformat(),
             }
+            # Compute invoice-level cost from prefetched items
+            invoice_cost = 0.0
+            for item in invoice.items.all():
+                if item.batch and hasattr(item.batch, 'purchase_rate') and item.batch.purchase_rate:
+                    pack_size = item.pack_size or 1
+                    total_qty = item.qty_strips + (item.qty_loose / pack_size)
+                    invoice_cost += float(item.batch.purchase_rate) * total_qty
+            result['invoiceCost']   = round(invoice_cost, 2)
+            result['invoiceProfit'] = round(float(invoice.grand_total) - invoice_cost, 2)
             results.append(result)
 
-        logger.info(f"Returning page {page} of {total_pages} ({len(results)} invoices)")
+        logger.info(f"Returning page {page} of {total_pages} ({len(results)} invoices) | date={start_date_str}→{end_date_str}")
 
         return Response({
             'data': results,
+            'analytics': analytics,
             'pagination': {
                 'page': page,
                 'pageSize': page_size,
@@ -690,6 +781,7 @@ class SaleListView(APIView):
                 'totalRecords': total_records
             }
         }, status=status.HTTP_200_OK)
+
 
 
 class SaleItemsView(APIView):

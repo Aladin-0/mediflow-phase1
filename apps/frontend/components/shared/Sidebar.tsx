@@ -16,6 +16,7 @@ import {
     CreditCard, UserCog, CalendarCheck, BarChart3, Settings,
     Pill, ChevronLeft, ChevronRight, MoreVertical, Wallet, Building2,
     BookOpen, ArrowUpLeft, ArrowDownLeft, List, Scale, PieChart, FileSearch,
+    ClipboardList,
 } from 'lucide-react';
 
 type SubNavItem = {
@@ -47,6 +48,12 @@ const NAV_ITEMS: NavItem[] = [
         icon: Receipt,
         permission: 'create_bills' as Permission,
         shortcut: 'B',
+    },
+    {
+        label: 'Sales',
+        href: '/dashboard/sales',
+        icon: ClipboardList,
+        permission: 'create_bills' as Permission,
     },
     {
         label: 'Inventory',

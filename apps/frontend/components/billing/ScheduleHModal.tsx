@@ -24,11 +24,16 @@ import {
     FormLabel,
     FormMessage,
 } from '@/components/ui/form';
-import { useDoctorSearch, useCreateDoctor, useCustomerList } from '@/hooks/useCustomers';
+import { useDoctorSearch, useCreateDoctor } from '@/hooks/useCustomers';
 import { useDebounce } from '@/hooks/useDebounce';
 import { useBillingStore } from '@/store/billingStore';
+import { useAuthStore } from '@/store/authStore';
 import { useToast } from '@/hooks/use-toast';
+import { useQuery } from '@tanstack/react-query';
+import { voucherApi } from '@/lib/apiClient';
 import { Doctor } from '@/types';
+import { CreateLedgerModal } from '../accounts/CreateLedgerModal';
+import { useOutletId } from '@/hooks/useOutletId';
 
 interface ScheduleHModalProps {
     isOpen: boolean;
@@ -41,12 +46,19 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
     // ── Patient search state ─────────────────────────────────────────────────
+    const outletId = useOutletId();
     const [patientQuery, setPatientQuery] = useState('');
     const [showPatientResults, setShowPatientResults] = useState(false);
+    const [showCreatePatient, setShowCreatePatient] = useState(false);
     const debouncedPatientQuery = useDebounce(patientQuery, 300);
-    const { data: patientResults = [], isLoading: isPatientSearching } = useCustomerList(
-        debouncedPatientQuery.length >= 2 ? { search: debouncedPatientQuery } : undefined
-    );
+    const { setCustomerLedger } = useBillingStore();
+    
+    const { data: patientResults = [], isLoading: isPatientSearching } = useQuery({
+        queryKey: ['ledgers', outletId, 'Sundry Debtors', debouncedPatientQuery],
+        queryFn: () => voucherApi.getLedgers(outletId, { group: 'Sundry Debtors', search: debouncedPatientQuery }),
+        enabled: !!outletId && debouncedPatientQuery.length >= 2,
+        staleTime: 60_000,
+    });
 
     // ── Doctor search state ──────────────────────────────────────────────────
     const [selectedDoctor, setSelectedDoctor] = useState<Doctor | null>(null);
@@ -122,12 +134,13 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
     const showSearchResults = debouncedQuery.length >= 2;
 
     return (
-        <Dialog
-            open={isOpen}
-            onOpenChange={(open) => {
-                if (!open && !isMandatory) onClose();
-            }}
-        >
+        <>
+            <Dialog
+                open={isOpen}
+                onOpenChange={(open) => {
+                    if (!open && !isMandatory) onClose();
+                }}
+            >
             <DialogContent
                 data-testid="schedule-h-modal"
                 className="max-w-xl max-h-[90vh] overflow-y-auto"
@@ -305,25 +318,35 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                                             <div className="flex items-center gap-2 px-3 py-2 text-sm text-slate-500">
                                                 <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching…
                                             </div>
-                                        ) : patientResults.length === 0 ? (
-                                            <div className="px-3 py-2 text-sm text-slate-500">No customer found — fill manually below</div>
                                         ) : (
-                                            patientResults.map((c: any) => (
-                                                <button key={c.id} type="button"
-                                                    onClick={() => {
-                                                        form.setValue('patientName', c.name, { shouldValidate: true });
-                                                        form.setValue('patientAddress', c.address || '', { shouldValidate: true });
-                                                        setPatientQuery('');
-                                                        setShowPatientResults(false);
-                                                    }}
-                                                    className="w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-50 text-left transition-colors">
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-sm font-medium text-slate-800 truncate">{c.name}</p>
-                                                        <p className="text-xs text-slate-500">{c.phone}{c.address ? ` • ${c.address}` : ''}</p>
-                                                    </div>
-                                                    <span className="text-xs text-primary font-medium shrink-0">Fill</span>
+                                            <>
+                                                {patientResults.map((c: any) => (
+                                                    <button key={c.id} type="button"
+                                                        onClick={() => {
+                                                            form.setValue('patientName', c.name, { shouldValidate: true });
+                                                            form.setValue('patientAddress', c.address || '', { shouldValidate: true });
+                                                            setPatientQuery('');
+                                                            setShowPatientResults(false);
+                                                            // Also auto-select the patient for the invoice
+                                                            setCustomerLedger(c);
+                                                        }}
+                                                        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-slate-50 text-left transition-colors">
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-medium text-slate-800 truncate">{c.name}</p>
+                                                            <p className="text-xs text-slate-500">{c.phone}{c.address ? ` • ${c.address}` : ''}</p>
+                                                        </div>
+                                                        <span className="text-xs text-primary font-medium shrink-0">Fill</span>
+                                                    </button>
+                                                ))}
+                                                <button type="button"
+                                                    onClick={() => { setShowCreatePatient(true); setShowPatientResults(false); }}
+                                                    className="w-full flex items-center gap-2 px-3 py-2.5 text-primary hover:bg-blue-50 text-sm font-medium transition-colors">
+                                                    <Plus className="w-4 h-4" />
+                                                    {patientResults.length === 0
+                                                        ? `No customer found — Create "${patientQuery}"`
+                                                        : `Add "${patientQuery}" as new patient`}
                                                 </button>
-                                            ))
+                                            </>
                                         )}
                                     </div>
                                 )}
@@ -446,5 +469,24 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                 </Form>
             </DialogContent>
         </Dialog>
+        
+            {/* Create New Patient Modal directly from Schedule H */}
+            {showCreatePatient && outletId && (
+                <CreateLedgerModal
+                    initialName={patientQuery}
+                    outletId={outletId}
+                    defaultGroupName="Sundry Debtors"
+                    onSave={(ledger) => {
+                        form.setValue('patientName', ledger.name, { shouldValidate: true });
+                        form.setValue('patientAddress', ledger.address || '', { shouldValidate: true });
+                        setCustomerLedger(ledger); // Important: select for bill too!
+                        setShowCreatePatient(false);
+                        setPatientQuery('');
+                        setShowPatientResults(false);
+                    }}
+                    onClose={() => setShowCreatePatient(false)}
+                />
+            )}
+        </>
     );
 }

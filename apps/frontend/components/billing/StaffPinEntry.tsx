@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { staffApi } from '@/lib/apiClient'
 import { useBillingStore } from '@/store/billingStore'
 import { useAuthStore } from '@/store/authStore'
+import { useSettingsStore } from '@/store/settingsStore'
 
 export function StaffPinEntry() {
     const [pinDigits, setPinDigits] = useState<string[]>([])
@@ -15,13 +16,15 @@ export function StaffPinEntry() {
     const [isShaking, setIsShaking] = useState(false)
     
     const user = useAuthStore(state => state.user)
+    const selectedOutletId = useSettingsStore(state => state.selectedOutletId)
     const { setActiveStaff } = useBillingStore()
 
     const verifyPin = useCallback(async (pin: string) => {
         setIsLoading(true)
         setError(null)
         try {
-            const response = await staffApi.lookupByPin(pin, user?.outletId ?? '')
+            const outletId = selectedOutletId ?? user?.outletId ?? ''
+            const response = await staffApi.lookupByPin(pin, outletId)
             setIsSuccess(true)
             setTimeout(() => {
                 setActiveStaff(response)
@@ -34,7 +37,7 @@ export function StaffPinEntry() {
         } finally {
             setIsLoading(false)
         }
-    }, [setActiveStaff, user])
+    }, [setActiveStaff, user, selectedOutletId])
 
     const handleInput = useCallback((key: string) => {
         if (isLoading || isSuccess) return
