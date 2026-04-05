@@ -1,11 +1,27 @@
+# Dependencies
 node_modules/
+*.egg-info/
+
+# Build outputs
 .next/
-__pycache__/
-*.pyc
-.env
-.env.local
-postgres_data/
-redis_data/
 dist/
 .turbo/
-*.egg-info/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.*.local
+
+# Database & cache data volumes
+postgres_data/
+redis_data/
+
+# IDE & OS
+.DS_Store
+.vscode/
+*.swp
