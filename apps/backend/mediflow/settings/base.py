@@ -64,7 +64,14 @@ TEMPLATES = [
 WSGI_APPLICATION = 'mediflow.wsgi.application'
 
 DATABASES = {
-    'default': env.db('DATABASE_URL')
+    'default': {
+        **env.db('DATABASE_URL'),
+        'OPTIONS': {
+            # Force PostgreSQL session timezone to IST so that all timestamps
+            # (both stored and displayed) use Asia/Kolkata time.
+            'options': '-c TimeZone=Asia/Kolkata',
+        },
+    }
 }
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -85,7 +92,7 @@ AUTH_PASSWORD_VALIDATORS = [
 LANGUAGE_CODE = 'en-in'
 TIME_ZONE = 'Asia/Kolkata'
 USE_I18N = True
-USE_TZ = True
+USE_TZ = False  # Store naive IST datetimes in DB – all services run in Asia/Kolkata (TZ env set in docker-compose)
 
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
