@@ -1,4 +1,5 @@
 import logging
+import re
 from django.db import transaction
 from datetime import datetime
 from django.db.models import Sum, Count, Q, F
@@ -187,6 +188,38 @@ class SaleCreateView(APIView):
                         {'detail': f'Customer {customer_id} not found'},
                         status=status.HTTP_404_NOT_FOUND
                     )
+                    
+            # Auto-create or fetch customer from Schedule H data if not already provided
+            if not customer and schedule_h_data:
+                patient_name = (schedule_h_data.get('patientName') or '').strip()
+                patient_phone = (schedule_h_data.get('patientPhone') or '').strip()
+                
+                if patient_name and patient_phone and re.match(r'^[6-9]\d{9}$', patient_phone):
+                    customer, created = Customer.objects.get_or_create(
+                        outlet=outlet,
+                        phone=patient_phone,
+                        defaults={
+                            'name': patient_name,
+                            'address': (schedule_h_data.get('patientAddress') or '').strip(),
+                        }
+                    )
+                    if created:
+                        # Create Ledger for the auto-created customer
+                        from apps.accounts.models import LedgerGroup
+                        debtor_group, _ = LedgerGroup.objects.get_or_create(
+                            outlet=outlet,
+                            name='Sundry Debtors',
+                            defaults={'nature': 'asset', 'is_system': True}
+                        )
+                        Ledger.objects.create(
+                            outlet=outlet,
+                            name=f"{customer.name} ({customer.phone})",
+                            group=debtor_group,
+                            linked_customer=customer,
+                            phone=customer.phone,
+                            address=customer.address or '',
+                            is_system=True
+                        )
 
             # Get billed_by staff (from request user - should be Staff instance)
             try:

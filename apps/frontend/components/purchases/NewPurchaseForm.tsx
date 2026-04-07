@@ -109,6 +109,7 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     const [items,             setItems]             = useState<PurchaseItemFormData[]>([emptyItem()]);
     const [hasDraft,          setHasDraft]          = useState(false);
     const [ledgerAdjustment,  setLedgerAdjustment]   = useState<number>(0);
+    const [adjustmentSign,    setAdjustmentSign]     = useState<'-' | '+'>('-');
     const [ledgerNote,        setLedgerNote]         = useState<string>('');
 
     // ── Add-product drawer state ───────────────────────────────────────────────
@@ -251,7 +252,11 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
     const preRound     = taxableValue + totalGST + totalCess + freight;
     const roundOff     = Math.round(preRound) - preRound;
     const computedTotal = preRound + roundOff;
-    const netPayable   = computedTotal - ledgerAdjustment;
+    
+    // + sign means addition (increase bill -> negative payload required for backend minus)
+    // - sign means deduction (reduce bill -> positive payload required for backend minus)
+    const effectiveAdjustment = ledgerAdjustment * (adjustmentSign === '-' ? 1 : -1);
+    const netPayable   = computedTotal - effectiveAdjustment;
 
     const totalUnits       = items.reduce((s, it) => s + it.qty * it.pkg, 0);
     const nearExpiryCount  = items.filter((it) => it.expiryDate && isNearExpiry(it.expiryDate)).length;
@@ -277,7 +282,7 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                 gstAmount:        parseFloat(totalGST.toFixed(2)),
                 cessAmount:       parseFloat(totalCess.toFixed(2)),
                 roundOff:          parseFloat(roundOff.toFixed(2)),
-                ledgerAdjustment:  parseFloat(ledgerAdjustment.toFixed(2)),
+                ledgerAdjustment:  parseFloat(effectiveAdjustment.toFixed(2)),
                 ledgerNote:        ledgerNote || undefined,
                 grandTotal:        parseFloat(netPayable.toFixed(2)),
                 items: items.map((it) => {
@@ -602,18 +607,35 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                         </p>
                     </div>
                     <div className="flex items-center gap-2">
-                        <span className="text-xs text-slate-500">− ₹</span>
+                        <select 
+                            className="cursor-pointer rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100"
+                            value={adjustmentSign}
+                            onChange={(e) => {
+                                setAdjustmentSign(e.target.value as '-' | '+');
+                                // optionally re-evaluate cap if they switch from + to - 
+                                if (e.target.value === '-') setLedgerAdjustment((prev) => Math.min(prev, computedTotal));
+                            }}
+                        >
+                            <option value="-">&minus; (Subtract)</option>
+                            <option value="+">+ (Add)</option>
+                        </select>
+                        <span className="text-sm font-medium text-slate-600">₹</span>
                         <input
                             type="number"
                             min={0}
-                            max={computedTotal}
+                            // Only cap at computedTotal if it's a deduction ('-')
+                            max={adjustmentSign === '-' ? computedTotal : undefined}
                             step="0.01"
-                            className="w-28 rounded border border-slate-200 bg-white px-2 py-1 text-right text-sm font-mono focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-36 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-right text-base font-mono shadow-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             placeholder="0.00"
                             value={ledgerAdjustment || ''}
                             onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
-                                setLedgerAdjustment(Math.min(val, computedTotal));
+                                const val = Math.max(0, parseFloat(e.target.value) || 0);
+                                if (adjustmentSign === '-') {
+                                    setLedgerAdjustment(Math.min(val, computedTotal));
+                                } else {
+                                    setLedgerAdjustment(val);
+                                }
                             }}
                         />
                     </div>
@@ -708,10 +730,10 @@ export function NewPurchaseForm({ onSuccess }: { onSuccess: () => void }) {
                         </div>
 
                         {ledgerAdjustment > 0 && (
-                            <div className="flex justify-between border-t border-dashed border-slate-200 pt-1 text-sm text-emerald-600">
+                            <div className={`flex justify-between border-t border-dashed border-slate-200 pt-1 text-sm ${adjustmentSign === '-' ? 'text-emerald-600' : 'text-rose-600'}`}>
                                 <span>Ledger Adjustment</span>
                                 <span className="font-mono">
-                                    − ₹{ledgerAdjustment.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                    {adjustmentSign === '-' ? '−' : '+'} ₹{ledgerAdjustment.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                                 </span>
                             </div>
                         )}

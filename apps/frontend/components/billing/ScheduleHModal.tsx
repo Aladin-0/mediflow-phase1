@@ -32,7 +32,6 @@ import { useToast } from '@/hooks/use-toast';
 import { useQuery } from '@tanstack/react-query';
 import { voucherApi } from '@/lib/apiClient';
 import { Doctor } from '@/types';
-import { CreateLedgerModal } from '../accounts/CreateLedgerModal';
 import { useOutletId } from '@/hooks/useOutletId';
 
 interface ScheduleHModalProps {
@@ -49,7 +48,6 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
     const outletId = useOutletId();
     const [patientQuery, setPatientQuery] = useState('');
     const [showPatientResults, setShowPatientResults] = useState(false);
-    const [showCreatePatient, setShowCreatePatient] = useState(false);
     const debouncedPatientQuery = useDebounce(patientQuery, 300);
     const { setCustomerLedger } = useBillingStore();
     
@@ -77,6 +75,7 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
         resolver: zodResolver(scheduleHSchema) as any,
         defaultValues: {
             patientName: '',
+            patientPhone: '',
             patientAge: 0,
             patientAddress: '',
             doctorName: '',
@@ -324,7 +323,9 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                                                     <button key={c.id} type="button"
                                                         onClick={() => {
                                                             form.setValue('patientName', c.name, { shouldValidate: true });
+                                                            form.setValue('patientPhone', c.phone || '', { shouldValidate: true });
                                                             form.setValue('patientAddress', c.address || '', { shouldValidate: true });
+                                                            setCustomerLedger(c);
                                                             setPatientQuery('');
                                                             setShowPatientResults(false);
                                                             // Also auto-select the patient for the invoice
@@ -339,12 +340,20 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                                                     </button>
                                                 ))}
                                                 <button type="button"
-                                                    onClick={() => { setShowCreatePatient(true); setShowPatientResults(false); }}
+                                                    onClick={() => {
+                                                        if (/^\d{5,}$/.test(patientQuery)) {
+                                                            form.setValue('patientPhone', patientQuery, { shouldValidate: true });
+                                                        } else {
+                                                            form.setValue('patientName', patientQuery, { shouldValidate: true });
+                                                        }
+                                                        setPatientQuery('');
+                                                        setShowPatientResults(false);
+                                                    }}
                                                     className="w-full flex items-center gap-2 px-3 py-2.5 text-primary hover:bg-blue-50 text-sm font-medium transition-colors">
                                                     <Plus className="w-4 h-4" />
                                                     {patientResults.length === 0
                                                         ? `No customer found — Create "${patientQuery}"`
-                                                        : `Add "${patientQuery}" as new patient`}
+                                                        : `Fill "${patientQuery}" as new patient`}
                                                 </button>
                                             </>
                                         )}
@@ -352,12 +361,12 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                                 )}
                             </div>
 
-                            <div className="grid grid-cols-3 gap-4">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <FormField
                                     control={form.control}
                                     name="patientName"
                                     render={({ field }) => (
-                                        <FormItem className="col-span-2">
+                                        <FormItem className="col-span-1">
                                             <FormLabel>Patient Name *</FormLabel>
                                             <FormControl>
                                                 <Input data-testid="sh-patient-name" placeholder="John Doe" {...field} />
@@ -368,9 +377,22 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
                                 />
                                 <FormField
                                     control={form.control}
+                                    name="patientPhone"
+                                    render={({ field }) => (
+                                        <FormItem className="col-span-1">
+                                            <FormLabel>Mobile No</FormLabel>
+                                            <FormControl>
+                                                <Input data-testid="sh-patient-phone" placeholder="9876543210" {...field} value={field.value || ''} />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                                <FormField
+                                    control={form.control}
                                     name="patientAge"
                                     render={({ field }) => (
-                                        <FormItem>
+                                        <FormItem className="col-span-1">
                                             <FormLabel>Age *</FormLabel>
                                             <FormControl>
                                                 <Input data-testid="sh-patient-age" type="number" min={1} max={120} {...field} />
@@ -470,23 +492,6 @@ export function ScheduleHModal({ isOpen, onClose, onSubmit, isMandatory }: Sched
             </DialogContent>
         </Dialog>
         
-            {/* Create New Patient Modal directly from Schedule H */}
-            {showCreatePatient && outletId && (
-                <CreateLedgerModal
-                    initialName={patientQuery}
-                    outletId={outletId}
-                    defaultGroupName="Sundry Debtors"
-                    onSave={(ledger) => {
-                        form.setValue('patientName', ledger.name, { shouldValidate: true });
-                        form.setValue('patientAddress', ledger.address || '', { shouldValidate: true });
-                        setCustomerLedger(ledger); // Important: select for bill too!
-                        setShowCreatePatient(false);
-                        setPatientQuery('');
-                        setShowPatientResults(false);
-                    }}
-                    onClose={() => setShowCreatePatient(false)}
-                />
-            )}
         </>
     );
 }

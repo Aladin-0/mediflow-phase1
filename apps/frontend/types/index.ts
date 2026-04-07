@@ -260,8 +260,11 @@ export interface Doctor {
     name: string;
     phone: string;
     regNo: string;
-    qualification: string;
-    specialty: string;
+    degree?: string;
+    qualification?: string;
+    specialty?: string;
+    hospitalName?: string;
+    address?: string;
     isActive: boolean;
 }
 

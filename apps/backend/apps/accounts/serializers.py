@@ -8,8 +8,8 @@ class DoctorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Doctor
         fields = [
-            'id', 'name', 'phone', 'regNo', 'qualification',
-            'specialty', 'isActive', 'createdAt'
+            'id', 'name', 'phone', 'regNo', 'degree', 'qualification',
+            'specialty', 'hospital_name', 'address', 'isActive', 'createdAt'
         ]
 
     def to_representation(self, instance):
@@ -19,9 +19,12 @@ class DoctorSerializer(serializers.ModelSerializer):
             'id': data.get('id'),
             'name': data.get('name'),
             'phone': data.get('phone'),
-            'regNo': instance.reg_no,
+            'regNo': instance.registration_no,
+            'degree': data.get('degree'),
             'qualification': data.get('qualification'),
             'specialty': data.get('specialty'),
+            'hospitalName': data.get('hospital_name'),
+            'address': data.get('address'),
             'isActive': instance.is_active,
             'createdAt': instance.created_at.isoformat(),
         }

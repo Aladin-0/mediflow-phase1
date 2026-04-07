@@ -475,6 +475,13 @@ class CustomerDetailView(APIView):
         customer.save()
         logger.info(f"Updated customer {customer_id}")
 
+        # Keep linked Ledger in sync
+        from apps.accounts.models import Ledger
+        Ledger.objects.filter(linked_customer=customer).update(
+            phone=customer.phone or '',
+            gstin=customer.gstin or '',
+        )
+
         result = {
             'id': str(customer.id),
             'name': customer.name,

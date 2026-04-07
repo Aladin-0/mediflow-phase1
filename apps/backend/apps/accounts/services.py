@@ -68,7 +68,7 @@ class LedgerService:
             return
 
         for customer in Customer.objects.for_outlet(outlet.id):
-            Ledger.objects.get_or_create(
+            ledger, created = Ledger.objects.get_or_create(
                 outlet=outlet,
                 linked_customer=customer,
                 defaults={
@@ -78,6 +78,17 @@ class LedgerService:
                     'gstin': customer.gstin or '',
                 },
             )
+            if not created:
+                # Sync phone (and other fields) even for existing ledgers
+                updated_fields = []
+                if ledger.phone != (customer.phone or ''):
+                    ledger.phone = customer.phone or ''
+                    updated_fields.append('phone')
+                if ledger.gstin != (customer.gstin or ''):
+                    ledger.gstin = customer.gstin or ''
+                    updated_fields.append('gstin')
+                if updated_fields:
+                    ledger.save(update_fields=updated_fields)
 
     @staticmethod
     @transaction.atomic

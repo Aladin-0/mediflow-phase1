@@ -91,7 +91,7 @@ export function useCreateDoctor() {
     const queryClient = useQueryClient();
     const outletId = useOutletId();
     return useMutation({
-        mutationFn: (data: { name: string; registrationNo: string; qualification?: string; phone?: string }) =>
+        mutationFn: (data: { name: string; registrationNo: string; degree?: string; qualification?: string; specialty?: string; hospitalName?: string; address?: string; phone?: string }) =>
             doctorsApi.create({ ...data, outletId }),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['doctors'] });
